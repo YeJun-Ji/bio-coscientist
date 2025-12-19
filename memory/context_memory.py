@@ -451,7 +451,6 @@ class ContextMemory:
             "rationale": getattr(answer, "rationale", ""),
             "deliverables": getattr(answer, "deliverables", {}),
             "confidence": getattr(answer, "confidence", 0.5),
-            "evidence": getattr(answer, "evidence", []),
             "builds_on": getattr(answer, "builds_on", []),
 
             # Ranking support
@@ -512,6 +511,11 @@ class ContextMemory:
                 "generation_method": answer.generation_method,
                 "status": answer.status,
 
+                # === ANSWER CONTENT ===
+                "answer": answer.answer,
+                "rationale": answer.rationale,
+                "deliverables": answer.deliverables,
+
                 # === ENTITY ANALYSIS (NEW!) ===
                 "entity_analysis": {
                     "primary_entities": entity_analysis.get("primary_entities", []),
@@ -520,18 +524,18 @@ class ContextMemory:
                     "context_refinements": entity_analysis.get("context_refinements", {})
                 },
 
-                # === DATA COLLECTION (UPDATED!) ===
+                # === DATA COLLECTION ===
                 "data_collection": {
                     "servers_used": data_collection.get("servers_used", answer.data_sources),
-                    "tools_used": data_collection.get("tools", []),
-                    "sources_detail": data_collection.get("sources_detail", {})
+                    "tools": data_collection.get("tools", []),  # Collection tools with full details
+                    "sources_file": data_collection.get("sources_file")  # File path reference
                 },
 
-                # === DATA ANALYSIS (UPDATED!) ===
+                # === DATA ANALYSIS ===
                 "data_analysis": {
                     "analyses_performed": data_analysis.get("analyses_performed", []),
-                    "tools_used": data_analysis.get("tools", []),
-                    "results": data_analysis.get("results", {})
+                    "tools": data_analysis.get("tools", []),  # Analysis tools with full details
+                    "results_file": data_analysis.get("results_file")  # File path reference
                 },
 
                 # === GENERATION PARAMETERS ===
@@ -558,9 +562,8 @@ class ContextMemory:
                     "iteration": answer.iteration
                 },
 
-                # === DEPENDENCIES & EVIDENCE ===
-                "builds_on": answer.builds_on,
-                "evidence": answer.evidence
+                # === DEPENDENCIES ===
+                "builds_on": answer.builds_on
             }
 
             # Save to file

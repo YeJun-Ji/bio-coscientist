@@ -111,7 +111,6 @@ class RequirementAnswer:
     rationale: str = ""                    # Why this answer was chosen
     deliverables: Dict[str, Any] = field(default_factory=dict)  # Produced outputs
     confidence: float = 0.5                # 0.0 to 1.0
-    evidence: List[str] = field(default_factory=list)  # Supporting evidence/references
     builds_on: List[str] = field(default_factory=list)  # IDs of previous answers this builds upon
 
     # Ranking Support (ELO Tournament)
@@ -158,7 +157,6 @@ class RequirementAnswer:
             "rationale": self.rationale,
             "deliverables": self.deliverables,
             "confidence": self.confidence,
-            "evidence": self.evidence,
             "builds_on": self.builds_on,
             # Ranking
             "elo_rating": self.elo_rating,
@@ -205,7 +203,6 @@ class RequirementAnswer:
             rationale=data.get("rationale", ""),
             deliverables=data.get("deliverables", {}),
             confidence=data.get("confidence", 0.5),
-            evidence=data.get("evidence", []),
             builds_on=data.get("builds_on", []),
             # Ranking
             elo_rating=data.get("elo_rating", 1200.0),

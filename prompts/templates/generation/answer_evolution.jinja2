@@ -58,7 +58,6 @@ Your task is to create an IMPROVED version of the parent answer using the specif
 Improve the answer by:
 - Adding more specific, concrete details
 - Including exact values, sequences, or methods
-- Citing more specific evidence
 - Reducing vagueness and generality
 {% elif evolution_method == "coherence" %}
 **COHERENCE EVOLUTION**
@@ -121,7 +120,6 @@ Respond with valid JSON only:
     {% endfor %}
   },
   "confidence": 0.80,
-  "evidence": ["Reference 1", "Reference 2"],
   "comparison_to_parent": "Brief explanation of why this is better than the parent answer"
 }
 ```

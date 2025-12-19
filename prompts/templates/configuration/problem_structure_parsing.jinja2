@@ -86,13 +86,18 @@ For each requirement, determine:
 6. **Be conservative**: 확실한 의존성만 표시, 불확실하면 독립으로 처리
 
 ## Output Format:
-Respond with valid JSON only:
+Respond with valid JSON only.
+
+**IMPORTANT: All output fields MUST be in English, even if the input problem is in another language.**
+- Translate all Korean text to English
+- Use English for: title, background, requirement titles/descriptions, deliverables
+- Keep requirement_id format unchanged (numbers/letters)
 
 ```json
 {
-  "title": "Problem title (extract from first line or generate concise title)",
-  "background": "All background/context text combined into one coherent section",
-  "input_data_description": "Description of input data if mentioned, or null",
+  "title": "Problem title in English (translate if needed)",
+  "background": "All background/context text in English",
+  "input_data_description": "Description of input data in English, or null",
   "problem_type": "flat" | "hierarchical",
   "format_detected": "flat_paren_num" | "flat_dot_num" | "section_paren" | "hierarchical",
   "major_sections": {

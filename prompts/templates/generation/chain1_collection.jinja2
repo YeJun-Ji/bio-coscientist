@@ -38,14 +38,21 @@ Use these refinements to focus your data collection:
 Collect data based on the identified entities and their types.
 
 **Tool Selection Strategy (Entity-Type Based)**:
-- **protein/gene** entities → search_proteins, get_protein_info, get_protein_features
-- **pathway** entities → search_kegg_pathway, get_pathway_info
+- **protein/gene** entities → search_proteins, get_protein_info, get_protein_features, find_pathways_by_gene (KEGG)
+- **pathway** entities → search_kegg_pathway, get_pathway_info (KEGG), get_pathway_hierarchy (KEGG)
+- **protein interactions** → find_pathways_by_gene first, then use KEGG pathway tools for interaction data
 - **compound/drug** entities → search_kegg_compound, get_compound_info, search_kegg_drug
-- **disease** entities → search_kegg_disease, search_pubmed
+- **disease** entities → search_kegg_disease, find_pathways_by_disease, search_pubmed
 - **domain/region** entities → get_protein_features (with region filter)
 - **organism** entities → search_organism, get_organism_info
 - **assay** entities → search_bioassay, get_assay_data
 - **literature** needs → search_pubmed, search_scholar
+
+**Pathway Tool Priority** (Use KEGG as primary source):
+- For pathway information → Prefer KEGG tools (search_kegg_pathway, get_pathway_info)
+- For gene-pathway relationships → Use find_pathways_by_gene (KEGG)
+- For disease-pathway relationships → Use find_pathways_by_disease (KEGG)
+- Reactome tools require specific Reactome pathway IDs (R-HSA-xxx format)
 
 **Priority-Based Selection**:
 - **required** entities → MUST select at least one tool for each

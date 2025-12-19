@@ -372,7 +372,11 @@ class SupervisorAgent:
 
             # Execute all requirements in this group in parallel
             if tasks:
-                await asyncio.gather(*tasks)
+                try:
+                    await asyncio.gather(*tasks)
+                except Exception as e:
+                    self.logger.error(f"✗ Group {group_idx + 1} failed: {e}")
+                    raise RuntimeError(f"Sequential Confirmation failed at group {group_idx + 1}: {e}")
 
             self.logger.info(f"✅ Group {group_idx + 1} complete")
 
@@ -485,6 +489,7 @@ class SupervisorAgent:
             self.logger.info(f"    ⚠️ FORCE CONFIRMED (max iterations): {best_answer.id}")
         else:
             self.logger.error(f"    ✗ No answers generated for {req_id}")
+            raise RuntimeError(f"Failed to generate any answers for requirement {req_id}")
 
     def _check_answer_convergence(
         self,
@@ -611,7 +616,8 @@ class SupervisorAgent:
             },
             llm_client=self.llm_client,
             tool_registry=self.tool_registry,
-            mcp_server_manager=self.mcp_manager
+            mcp_server_manager=self.mcp_manager,
+            experiment_dir=self.config.get("session_dir")  # NEW parameter
         )
 
     def _create_sc_reflection_agent(self) -> ReflectionAgent:

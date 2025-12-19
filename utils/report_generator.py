@@ -662,7 +662,6 @@ class FinalResearchReportGenerator:
                 answer = answer_data.get("answer", "")
                 rationale = answer_data.get("rationale", "")
                 deliverables = answer_data.get("deliverables", {})
-                evidence = answer_data.get("evidence", [])
                 confidence = answer_data.get("confidence", 0)
 
                 # Try LLM synthesis if available
@@ -687,11 +686,6 @@ class FinalResearchReportGenerator:
                         lines.append(f"{answer}\n")
                     if rationale:
                         lines.append(f"{rationale}\n")
-
-                # References (always show separately)
-                if evidence:
-                    evidence_str = ", ".join(str(e) for e in evidence[:5])
-                    lines.append(f"**References:** {evidence_str}\n")
 
                 # Confidence (always show separately)
                 lines.append(f"**Confidence:** {confidence*100:.1f}%\n")

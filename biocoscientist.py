@@ -374,6 +374,77 @@ class BioCoScientist:
 # Main Execution
 # ============================================================================
 
+def _save_readable_report(output_data: dict, report_file: Path):
+    """Save a human-readable report in simple requirement-answer format"""
+    import json
+    import re
+
+    with open(report_file, 'w', encoding='utf-8') as f:
+        # Title
+        title = output_data.get('title', 'Research Results')
+        f.write(f"# {title}\n\n")
+
+        req_answers = output_data.get("requirements_and_answers", [])
+
+        # Sort by requirement_id (extract numeric part for proper sorting)
+        def get_req_number(req_id):
+            """Extract numeric part from requirement_id (e.g., 'req_1' -> 1)"""
+            match = re.search(r'(\d+)', str(req_id))
+            return int(match.group(1)) if match else 0
+
+        req_answers_sorted = sorted(req_answers, key=lambda x: get_req_number(x.get("requirement_id", "0")))
+
+        # Write each requirement and its confirmed answer
+        for idx, item in enumerate(req_answers_sorted, 1):
+            req_title = item.get("requirement_title", "Untitled")
+            answer = item.get("answer", "No answer provided")
+            rationale = item.get("rationale", "")
+            deliverables = item.get("deliverables", {})
+
+            # Requirement title
+            f.write(f"{idx}. {req_title}\n\n")
+
+            # Main answer
+            f.write(f"{answer}\n")
+
+            # Rationale (if exists)
+            if rationale and rationale.strip():
+                f.write(f"\n**이유/근거:**\n{rationale}\n")
+
+            # Deliverables (simplified, only show non-empty ones)
+            if deliverables and any(deliverables.values()):
+                f.write(f"\n**주요 결과:**\n")
+                for key, value in deliverables.items():
+                    if not value:  # Skip empty values
+                        continue
+
+                    if isinstance(value, list) and len(value) > 0:
+                        # Show first few items for lists
+                        items = value[:3]
+                        items_str = ', '.join(str(v) for v in items)
+                        more = f" (및 {len(value) - 3}개 더)" if len(value) > 3 else ""
+                        f.write(f"  - {key}: {items_str}{more}\n")
+                    elif isinstance(value, dict) and len(value) > 0:
+                        # For dicts, show compact representation
+                        f.write(f"  - {key}: {len(value)}개 항목\n")
+                    elif isinstance(value, str) and len(value) > 0:
+                        # For strings, truncate if too long
+                        val_str = value[:100] + "..." if len(value) > 100 else value
+                        f.write(f"  - {key}: {val_str}\n")
+                    elif value:  # Other non-empty values
+                        f.write(f"  - {key}: {value}\n")
+
+            # Add spacing between requirements
+            f.write("\n" + "─" * 80 + "\n\n")
+
+        # Footer with simple stats
+        stats = output_data.get("statistics", {})
+        f.write(f"\n---\n")
+        f.write(f"**통계:** {stats.get('total_requirements', len(req_answers))}개 요구사항 완료 | ")
+        f.write(f"평균 품질: {stats.get('average_quality', 0):.2f} | ")
+        f.write(f"소요시간: {stats.get('duration_seconds', 0):.1f}초\n")
+
+
 async def main(problem_file: str, session_dir: Path):
     """
     Main execution function - simplified to just run research from file
@@ -382,32 +453,101 @@ async def main(problem_file: str, session_dir: Path):
         problem_file: Path to problem description file
         session_dir: Session directory for logs (created by setup_logging)
     """
+    import json
+
     # Create BioCoScientist instance with provided session_dir
     bio_coscientist = BioCoScientist(session_dir=session_dir)
-    
+
     # Run research from file - ConfigurationAgent handles all parsing
     results = await bio_coscientist.research_from_file(problem_file)
-    
-    # Display results
-    print("\n" + "="*80)
-    print("✅ RESEARCH COMPLETE")
-    print("="*80)
-    
-    final_metrics = results.get('final_metrics', {})
-    execution_stats = results.get('execution_stats', {})
-    
-    print(f"\n📊 Research Metrics:")
-    print(f"  Total Hypotheses: {final_metrics.get('total_hypotheses', 0)}")
-    print(f"  Reviewed: {final_metrics.get('reviewed_hypotheses', 0)}")
-    print(f"  Passed Review: {final_metrics.get('passed_hypotheses', 0)}")
-    print(f"  Average ELO: {final_metrics.get('avg_elo_rating', 0):.1f}")
-    
-    print(f"\n⚙️ Execution Stats:")
-    print(f"  Iterations: {execution_stats.get('iterations', 0)}")
-    print(f"  Duration: {execution_stats.get('duration_seconds', 0):.1f}s")
-    
-    # Export results
-    bio_coscientist.export_results(results, "research_results.json")
+
+    # Check if this is Sequential Confirmation results
+    if results and results.get("mode") == "sequential_confirmation":
+        # Sequential Confirmation results - use new format
+        confirmed = results.get("confirmed_answers", {})
+        stats = results.get("statistics", {})
+
+        print("\n" + "="*80)
+        print("✅ RESEARCH COMPLETE (Sequential Confirmation)")
+        print("="*80)
+
+        print(f"\n📊 Results Summary:")
+        print(f"  - Requirements Answered: {stats.get('total_requirements', len(confirmed))}")
+        print(f"  - Average Quality: {stats.get('average_quality', 0):.2f}")
+        print(f"  - Average ELO: {stats.get('average_elo', 0):.1f}")
+        print(f"  - Duration: {stats.get('duration_seconds', 0):.1f}s")
+
+        # Save results in requirement-answer format
+        results_file = session_dir / "results.json"
+
+        # Get research config for title
+        research_config = bio_coscientist.supervisor.research_config
+        parsed_problem = research_config.get("parsed_problem", {}) if research_config else {}
+
+        # Build clean requirement-answer output format
+        output_data = {
+            "title": parsed_problem.get("title", "Research Results"),
+            "status": results.get("status", "success"),
+            "statistics": stats,
+            "requirements_and_answers": []
+        }
+
+        for req_id, answer_data in confirmed.items():
+            # Extract answer info
+            if isinstance(answer_data, dict):
+                answer_text = answer_data.get("answer", "")
+                rationale = answer_data.get("rationale", "")
+                deliverables = answer_data.get("deliverables", {})
+                confidence = answer_data.get("confidence", 0)
+                req_title = answer_data.get("requirement_title", "")
+            else:
+                answer_text = str(answer_data)
+                rationale = ""
+                deliverables = {}
+                confidence = 0
+                req_title = ""
+
+            output_data["requirements_and_answers"].append({
+                "requirement_id": req_id,
+                "requirement_title": req_title,
+                "answer": answer_text,
+                "rationale": rationale,
+                "deliverables": deliverables,
+                "confidence": confidence
+            })
+
+        # Save JSON results
+        with open(results_file, 'w', encoding='utf-8') as f:
+            json.dump(output_data, f, ensure_ascii=False, indent=2, default=str)
+
+        print(f"\n💾 Results saved to: {results_file}")
+
+        # Save human-readable report
+        report_file = session_dir / "research_report.txt"
+        _save_readable_report(output_data, report_file)
+        print(f"📄 Report saved to: {report_file}")
+
+    else:
+        # Legacy hypothesis-based results
+        print("\n" + "="*80)
+        print("✅ RESEARCH COMPLETE")
+        print("="*80)
+
+        final_metrics = results.get('final_metrics', {})
+        execution_stats = results.get('execution_stats', {})
+
+        print(f"\n📊 Research Metrics:")
+        print(f"  Total Hypotheses: {final_metrics.get('total_hypotheses', 0)}")
+        print(f"  Reviewed: {final_metrics.get('reviewed_hypotheses', 0)}")
+        print(f"  Passed Review: {final_metrics.get('passed_hypotheses', 0)}")
+        print(f"  Average ELO: {final_metrics.get('avg_elo_rating', 0):.1f}")
+
+        print(f"\n⚙️ Execution Stats:")
+        print(f"  Iterations: {execution_stats.get('iterations', 0)}")
+        print(f"  Duration: {execution_stats.get('duration_seconds', 0):.1f}s")
+
+        # Export results
+        bio_coscientist.export_results(results, "research_results.json")
 
 
 if __name__ == "__main__":

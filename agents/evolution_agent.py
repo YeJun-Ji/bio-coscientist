@@ -383,7 +383,6 @@ class EvolutionAgent(BaseAgent):
                 rationale=response.get("rationale", ""),
                 deliverables=response.get("deliverables", {}),
                 confidence=max(0.0, min(1.0, float(response.get("confidence", 0.6)))),
-                evidence=response.get("evidence", []),
                 builds_on=self._get_answer_builds_on(parent_answer),
                 status="generated",
                 elo_rating=1200.0,

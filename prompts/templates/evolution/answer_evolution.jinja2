@@ -57,11 +57,10 @@ Your improved answer MUST remain consistent with these confirmed answers:
 
 {% if evolution_method == "grounding" %}
 **GROUNDING EVOLUTION**
-Focus: {{ focus|default("Add more specific details, concrete values, and supporting evidence") }}
+Focus: {{ focus|default("Add more specific details and concrete values") }}
 
 Improve the answer by:
 - Adding more specific, concrete details (exact values, sequences, methods)
-- Including additional supporting evidence and citations
 - Reducing vagueness and generality
 - Strengthening the scientific foundation
 {% elif evolution_method == "coherence" %}
@@ -136,8 +135,6 @@ Respond with valid JSON only:
   },
 
   "confidence": 0.75,
-
-  "evidence": ["Reference 1", "Reference 2"],
 
   "comparison_to_parent": "2-3 sentence explanation of why this evolved answer is better than the parent"
 }

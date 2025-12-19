@@ -123,8 +123,7 @@ Respond with valid JSON only:
         "{{ deliverable|lower|replace(' ', '_')|replace('-', '_') }}": "Specific output for: {{ deliverable }}"{% if not loop.last %},{% endif %}
         {% endfor %}
       },
-      "confidence": 0.85,
-      "evidence": ["Reference 1", "Reference 2"]
+      "confidence": 0.85
     },
     {
       "approach": "moderate",
@@ -133,8 +132,7 @@ Respond with valid JSON only:
       "answer": "Different detailed answer...",
       "rationale": "Different scientific reasoning...",
       "deliverables": { ... },
-      "confidence": 0.75,
-      "evidence": ["Reference 1"]
+      "confidence": 0.75
     },
     {
       "approach": "aggressive",
@@ -143,8 +141,7 @@ Respond with valid JSON only:
       "answer": "Novel detailed answer...",
       "rationale": "Novel scientific reasoning...",
       "deliverables": { ... },
-      "confidence": 0.65,
-      "evidence": ["Reference 1"]
+      "confidence": 0.65
     }
   ]
 }
@@ -158,6 +155,5 @@ Before finalizing, verify:
 - [ ] Answers are consistent with confirmed context
 - [ ] Specific values/methods are included (not vague)
 - [ ] Confidence levels reflect approach risk
-- [ ] Evidence cites real sources where possible
 
 Generate {{ num_answers|default(3) }} diverse answers now.

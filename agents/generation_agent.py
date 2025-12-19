@@ -51,6 +51,7 @@ class GenerationAgent(BaseAgent):
         tool_registry: Optional[ToolRegistry] = None,
         prompt_manager: Optional[PromptManager] = None,
         mcp_server_manager=None,
+        experiment_dir: Optional[str] = None,  # NEW parameter
         **kwargs
     ):
         super().__init__(
@@ -69,10 +70,17 @@ class GenerationAgent(BaseAgent):
             self.tool_registry,
             mcp_server_manager=self.mcp_manager
         )
-        
+
         # Prompt management
         self.prompt_manager = prompt_manager or PromptManager()
-        
+
+        # === NEW: Data file management ===
+        self.data_file_manager = None
+        if experiment_dir:
+            from ..utils.data_file_manager import DataFileManager
+            self.data_file_manager = DataFileManager(experiment_dir)
+            self.log(f"DataFileManager initialized for: {experiment_dir}")
+
         self.log(f"GenerationAgent initialized with ToolRegistry ({len(self.tool_registry._tools)} tools) and PromptManager")
 
     # ========================================================================
@@ -286,7 +294,8 @@ class GenerationAgent(BaseAgent):
         self.log("  │ ┌─ STAGE 2: Unified Collection + Analysis (Entity-Based)")
         collected_data = await self._execute_unified_collection_analysis(
             entity_analysis=entity_analysis,
-            research_goal=research_goal
+            research_goal=research_goal,
+            req_id=req_id  # NEW: Pass req_id for file saving
         )
         self.log("  │ └─ STAGE 2 COMPLETE")
 
@@ -632,8 +641,23 @@ class GenerationAgent(BaseAgent):
                     "confidence": answer.confidence
                 }
 
-        # Truncate collected data for prompt
-        truncated_data = self._truncate_data_for_prompt(collected_data)
+        # === MODIFIED: File-based mode with fallback ===
+        if self.data_file_manager and "_file_paths" in collected_data:
+            self.log(f"  │ Using file-based analysis results (zero truncation)")
+
+            # Load ONLY Chain 2 analysis results (not Chain 1 data)
+            analysis_results = self.data_file_manager.load_analysis_results(req_id)
+
+            truncated_data = {
+                "sources": {},  # Empty - not needed for Answer Gen
+                "analysis": analysis_results,  # Full analysis results
+                "_file_paths": collected_data["_file_paths"],
+                "_metadata_only": False  # Analysis results are complete
+            }
+        else:
+            # FALLBACK: Old truncation (backward compatible)
+            self.log(f"  │ Using legacy truncation (no DataFileManager)")
+            truncated_data = self._truncate_data_for_prompt(collected_data)
 
         # Get static constraints
         static_constraints = self._extract_static_constraints()
@@ -653,8 +677,8 @@ class GenerationAgent(BaseAgent):
                 "depends_on": depends_on
             },
             context=context_for_prompt,
-            data_sources=truncated_data.get("sources", {}),
-            analysis_results=truncated_data.get("analysis", {}),
+            data_sources={},  # Empty - Chain 1 data not needed
+            analysis_results=truncated_data.get("analysis", {}),  # Full results
             constraints=static_constraints.get("hard", []),
             num_answers=num_answers
         )
@@ -691,6 +715,9 @@ class GenerationAgent(BaseAgent):
                     "strategy": ans_data.get("strategy", ""),
                     "innovation_level": ans_data.get("innovation_level", "moderate"),
 
+                    # === NEW: File paths ===
+                    "data_files": collected_data.get("_file_paths", {}),
+
                     # Entity analysis (NEW!)
                     "entity_analysis": collected_data.get("entity_analysis", {}),
 
@@ -698,14 +725,16 @@ class GenerationAgent(BaseAgent):
                     "data_collection": {
                         "servers_used": list(collected_data.get("sources", {}).keys()),
                         "tools": tool_usage.get("collection_tools", []),
-                        "sources_detail": collected_data.get("sources", {})  # Full results
+                        "sources_file": collected_data.get("_file_paths", {}).get("sources_file"),  # NEW
+                        # REMOVED: "sources_detail" (now in file)
                     },
 
                     # Data analysis tracking
                     "data_analysis": {
                         "analyses_performed": collected_data.get("entity_analysis", {}).get("analysis_needs", []),
                         "tools": tool_usage.get("analysis_tools", []),
-                        "results": collected_data.get("analysis", {})  # Full results
+                        "results_file": collected_data.get("_file_paths", {}).get("results_file"),  # NEW
+                        # REMOVED: "results" (now in file)
                     }
                 }
 
@@ -717,7 +746,6 @@ class GenerationAgent(BaseAgent):
                     rationale=ans_data.get("rationale", ""),
                     deliverables=ans_data.get("deliverables", {}),
                     confidence=max(0.0, min(1.0, float(ans_data.get("confidence", 0.5)))),
-                    evidence=ans_data.get("evidence", []),
                     builds_on=depends_on,
                     status="generated",
                     elo_rating=1200.0,
@@ -843,7 +871,6 @@ class GenerationAgent(BaseAgent):
                 rationale=response.get("rationale", ""),
                 deliverables=response.get("deliverables", {}),
                 confidence=max(0.0, min(1.0, float(response.get("confidence", 0.5)))),
-                evidence=response.get("evidence", []),
                 builds_on=parent_answer.builds_on,
                 status="generated",
                 elo_rating=1200.0,
@@ -876,7 +903,8 @@ class GenerationAgent(BaseAgent):
     async def _execute_unified_collection_analysis(
         self,
         entity_analysis: Dict[str, Any],
-        research_goal: ResearchGoal
+        research_goal: ResearchGoal,
+        req_id: str  # NEW: Required for file saving
     ) -> Dict[str, Any]:
         """
         Stage 2: Execute Unified Collection + Analysis (NEW - Problem-Agnostic).
@@ -1043,6 +1071,26 @@ class GenerationAgent(BaseAgent):
         self.log(f"[CHAIN-1] 📊 Collected from {len(collected_data['sources'])} source(s): {list(collected_data['sources'].keys())}")
         self.log("=" * 60)
 
+        # === NEW: Save Chain 1 data to files ===
+        if self.data_file_manager:
+            self.log("[CHAIN-1] 💾 Saving data to files...")
+
+            try:
+                file_paths = self.data_file_manager.save_collection_data(req_id, collected_data)
+                collected_data["_file_paths"] = file_paths  # Store for downstream use
+
+                self.log(f"[CHAIN-1] ✓ Full data saved: {file_paths['sources_file']}")
+                self.log(f"[CHAIN-1] ✓ Metadata saved: {file_paths['metadata_file']}")
+
+                # Log file size
+                import os
+                sources_size = os.path.getsize(file_paths['sources_file'])
+                self.log(f"[CHAIN-1] 📦 Size: {sources_size / 1024:.1f} KB (no truncation)")
+
+            except Exception as e:
+                self.log(f"[CHAIN-1] ⚠️  Failed to save files: {e}", "warning")
+                # Continue without files (fallback to old truncation)
+
         # ========== Chain 2: 데이터 분석 ==========
         self.log("=" * 60)
         self.log("[CHAIN-2] 🔬 STARTING DATA ANALYSIS CHAIN (Entity-Based)")
@@ -1152,6 +1200,21 @@ class GenerationAgent(BaseAgent):
         self.log(f"[CHAIN-2] ⏱️  Duration: {chain2_duration:.2f}s")
         self.log(f"[CHAIN-2] 📊 Analysis results: {len(collected_data['analysis'])} tool(s) - {list(collected_data['analysis'].keys())}")
         self.log("=" * 60)
+
+        # === NEW: Save Chain 2 analysis results ===
+        if self.data_file_manager and collected_data.get("analysis"):
+            self.log("[CHAIN-2] 💾 Saving analysis results to files...")
+
+            try:
+                analysis_paths = self.data_file_manager.save_analysis_data(
+                    req_id,
+                    collected_data["analysis"]
+                )
+                collected_data["_file_paths"]["results_file"] = analysis_paths["results_file"]
+
+                self.log(f"[CHAIN-2] ✓ Analysis saved: {analysis_paths['results_file']}")
+            except Exception as e:
+                self.log(f"[CHAIN-2] ⚠️  Failed to save analysis: {e}", "warning")
 
         # Function exit
         func_duration = time.time() - func_start
