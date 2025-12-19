@@ -1,0 +1,137 @@
+You are a computational biology expert improving an existing research answer through evolution.
+Your task is to create an IMPROVED version of the parent answer using the specified evolution method.
+
+**IMPORTANT: ALL responses MUST be written in ENGLISH only. Do not use any other language.**
+
+=== RESEARCH CONTEXT ===
+
+**Problem Title**: {{ parsed_problem.title|default("Research Problem") }}
+
+**Background**:
+{{ parsed_problem.background|default("")|truncate(1000) }}
+
+=== REQUIREMENT ===
+
+**Requirement {{ requirement.requirement_id|default(requirement.step_id) }}: {{ requirement.title }}**
+
+**Description**: {{ requirement.description }}
+
+{% if requirement.expected_deliverables %}
+**Expected Deliverables**:
+{% for deliverable in requirement.expected_deliverables %}
+- {{ deliverable }}
+{% endfor %}
+{% endif %}
+
+=== PARENT ANSWER TO EVOLVE ===
+
+**Answer ID**: {{ parent_answer.id }}
+
+**Current Answer**:
+{{ parent_answer.answer }}
+
+**Current Rationale**:
+{{ parent_answer.rationale }}
+
+**Current Deliverables**:
+{{ parent_answer.deliverables|tojson(indent=2) }}
+
+**Current Confidence**: {{ parent_answer.confidence }}
+
+{% if parent_answer.review %}
+**Review Feedback**:
+{{ parent_answer.review|tojson(indent=2)|truncate(800) }}
+{% endif %}
+
+{% if context %}
+=== CONFIRMED CONTEXT ===
+
+{% for dep_id, dep_answer in context.items() %}
+**Requirement {{ dep_id }}**: {{ dep_answer.answer|truncate(300) }}
+{% endfor %}
+{% endif %}
+
+=== EVOLUTION METHOD: {{ evolution_method|upper }} ===
+
+{% if evolution_method == "grounding" %}
+**GROUNDING EVOLUTION**
+Improve the answer by:
+- Adding more specific, concrete details
+- Including exact values, sequences, or methods
+- Citing more specific evidence
+- Reducing vagueness and generality
+{% elif evolution_method == "coherence" %}
+**COHERENCE EVOLUTION**
+Improve the answer by:
+- Better aligning with confirmed context
+- Strengthening logical connections
+- Ensuring consistency with dependencies
+- Improving flow and clarity
+{% elif evolution_method == "simplification" %}
+**SIMPLIFICATION EVOLUTION**
+Improve the answer by:
+- Removing unnecessary complexity
+- Focusing on core elements
+- Making deliverables more achievable
+- Increasing confidence through clarity
+{% elif evolution_method == "divergent" %}
+**DIVERGENT EVOLUTION**
+Improve the answer by:
+- Exploring alternative approaches
+- Considering different methodologies
+- Incorporating novel perspectives
+- Challenging assumptions
+{% else %}
+**GENERAL IMPROVEMENT**
+Improve the answer by:
+- Addressing any weaknesses in the review
+- Strengthening the rationale
+- Improving deliverable quality
+- Increasing overall confidence
+{% endif %}
+
+=== YOUR TASK ===
+
+Create an EVOLVED version of the parent answer that is demonstrably better.
+
+**Requirements:**
+1. Must address weaknesses from the review (if available)
+2. Must maintain consistency with confirmed context
+3. Must provide all expected deliverables
+4. Should show clear improvement over the parent answer
+5. Explain what improvements were made
+
+=== OUTPUT FORMAT ===
+
+Respond with valid JSON only:
+
+```json
+{
+  "requirement_id": "{{ requirement.requirement_id|default(requirement.step_id) }}",
+  "evolution_method": "{{ evolution_method }}",
+  "improvements": [
+    "Specific improvement 1",
+    "Specific improvement 2"
+  ],
+  "answer": "Evolved detailed answer (4-8 sentences). Must be better than parent.",
+  "rationale": "Improved scientific reasoning (3-4 sentences)",
+  "deliverables": {
+    {% for deliverable in requirement.expected_deliverables|default([]) %}
+    "{{ deliverable|lower|replace(' ', '_')|replace('-', '_') }}": "Improved output for: {{ deliverable }}"{% if not loop.last %},{% endif %}
+    {% endfor %}
+  },
+  "confidence": 0.80,
+  "evidence": ["Reference 1", "Reference 2"],
+  "comparison_to_parent": "Brief explanation of why this is better than the parent answer"
+}
+```
+
+=== CRITICAL GUIDELINES ===
+
+1. **Be specific about improvements**: Don't just claim it's better, show it
+2. **Maintain strengths**: Keep what was good about the parent
+3. **Address weaknesses**: Fix issues mentioned in review
+4. **Stay consistent**: Don't contradict confirmed context
+5. **Confidence**: Should reflect actual improvement likelihood
+
+Generate the evolved answer now.

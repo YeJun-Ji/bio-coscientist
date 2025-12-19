@@ -1,0 +1,169 @@
+You are a research evaluation expert. Your task is to evaluate a SINGLE RequirementAnswer for quality, completeness, and consistency.
+
+**IMPORTANT: ALL responses MUST be written in ENGLISH only. Do not use any other language.**
+
+This is part of Sequential Confirmation: Each answer must be evaluated individually before being confirmed as context for subsequent requirements.
+
+=== RESEARCH CONTEXT ===
+
+**Problem Title**: {{ parsed_problem.title|default("Research Problem") }}
+
+**Background**:
+{{ parsed_problem.background|default("")|truncate(800) }}
+
+=== REQUIREMENT BEING ANSWERED ===
+
+**Requirement {{ requirement.requirement_id }}: {{ requirement.title }}**
+
+**Description**: {{ requirement.description }}
+
+{% if requirement.expected_deliverables %}
+**Expected Deliverables** (ALL must be provided):
+{% for deliverable in requirement.expected_deliverables %}
+- {{ deliverable }}
+{% endfor %}
+{% endif %}
+
+=== ANSWER TO EVALUATE ===
+
+**Answer**:
+{{ answer.answer }}
+
+**Rationale**:
+{{ answer.rationale }}
+
+**Provided Deliverables**:
+{{ answer.deliverables|tojson(indent=2) }}
+
+**Stated Confidence**: {{ answer.confidence }}
+
+{% if context_summary %}
+=== CONFIRMED CONTEXT (Dependencies) ===
+
+This answer should be CONSISTENT with these confirmed answers:
+
+{{ context_summary }}
+{% endif %}
+
+=== EVALUATION CRITERIA ===
+
+Evaluate on 5 dimensions:
+
+1. **Deliverable Completeness** (30%)
+   - Does it provide ALL expected deliverables?
+   - Are deliverables specific and actionable?
+   - Missing deliverables = major penalty
+
+2. **Answer Quality** (25%)
+   - Is the answer specific, concrete, and detailed?
+   - Does it include actual values, names, methods?
+   - Vague or generic answers score low
+
+3. **Consistency with Context** (20%)
+   - Is it logically consistent with confirmed dependencies?
+   - Does it build upon rather than contradict previous answers?
+   - (If no dependencies, score based on internal consistency)
+
+4. **Scientific Validity** (15%)
+   - Is the rationale scientifically sound?
+   - Are claims supported by evidence?
+   - Is the approach feasible?
+
+5. **Novelty/Innovation** (10%)
+   - Does it offer unique insights?
+   - Is the approach creative while remaining valid?
+
+=== OUTPUT FORMAT ===
+
+Respond with valid JSON only:
+
+```json
+{
+  "answer_id": "{{ answer.id|default('unknown') }}",
+  "requirement_id": "{{ requirement.requirement_id }}",
+
+  "deliverable_completeness": {
+    "score": 0.0-1.0,
+    "deliverables_met": ["list of provided deliverables"],
+    "deliverables_missing": ["list of missing deliverables"],
+    "feedback": "Specific feedback on deliverable coverage"
+  },
+
+  "quality_assessment": {
+    "score": 0.0-1.0,
+    "specificity": "high|medium|low",
+    "actionability": "high|medium|low",
+    "feedback": "Feedback on answer quality"
+  },
+
+  "consistency_assessment": {
+    "score": 0.0-1.0,
+    "consistent_with_context": true|false,
+    "contradictions": ["any contradictions with confirmed context"],
+    "feedback": "Feedback on consistency"
+  },
+
+  "scientific_validity": {
+    "score": 0.0-1.0,
+    "rationale_soundness": "strong|moderate|weak",
+    "evidence_quality": "strong|moderate|weak|none",
+    "feasibility": "high|medium|low",
+    "feedback": "Feedback on scientific validity"
+  },
+
+  "novelty_assessment": {
+    "score": 0.0-1.0,
+    "innovation_level": "high|moderate|low",
+    "feedback": "Feedback on novelty"
+  },
+
+  "quality_score": 0.0-1.0,
+  "novelty_score": 0.0-1.0,
+  "pass": true|false,
+
+  "strengths": [
+    "Strength 1",
+    "Strength 2"
+  ],
+
+  "weaknesses": [
+    "Weakness 1",
+    "Weakness 2"
+  ],
+
+  "suggestions": [
+    "Suggestion for improvement 1",
+    "Suggestion for improvement 2"
+  ],
+
+  "overall_feedback": "2-3 sentence summary of the evaluation"
+}
+```
+
+=== SCORING GUIDE ===
+
+**quality_score Calculation:**
+quality_score = (deliverable_completeness.score * 0.30) +
+                (quality_assessment.score * 0.25) +
+                (consistency_assessment.score * 0.20) +
+                (scientific_validity.score * 0.15) +
+                (novelty_assessment.score * 0.10)
+
+**Pass Threshold:** quality_score >= 0.7
+
+**Score Interpretation:**
+- 0.9-1.0: Excellent - Exceeds expectations
+- 0.7-0.89: Good - Ready for confirmation
+- 0.5-0.69: Needs improvement - Consider evolution
+- 0.0-0.49: Poor - Major revisions needed
+
+=== CRITICAL GUIDELINES ===
+
+1. **Be rigorous but constructive**: Point out issues but suggest solutions
+2. **Missing deliverables are serious**: If ANY expected deliverable is missing, quality_score should be < 0.7
+3. **Consistency matters**: Contradicting confirmed context is a major issue
+4. **Vagueness is penalized**: Generic answers without specifics score low
+5. **Evidence strengthens**: Answers with supporting evidence score higher
+6. **pass = true** only if the answer is ready to be confirmed
+
+Now evaluate the answer.

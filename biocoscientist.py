@@ -15,100 +15,104 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # 로깅 설정 - 파일과 콘솔 모두에 출력
-def setup_logging():
-    """Set up logging to both file and console"""
-    log_dir = Path("./logs")
-    log_dir.mkdir(exist_ok=True)
-    
+def setup_logging(experiment_name: Optional[str] = None):
+    """
+    Set up dual logging configuration (console + full terminal log file).
+
+    Logs are saved to:
+    - logs/<project_name_timestamp>/full_terminal.log - All terminal output
+    - logs/<project_name_timestamp>/supervisor.log - Essential flow only (managed by SupervisorAgent)
+
+    Args:
+        experiment_name: Name of the project (used as directory name in logs/)
+
+    Returns:
+        Path: Session directory path (logs/<project_name_timestamp>/)
+    """
+    # Create session directory: logs/<project_name_timestamp>/
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = log_dir / f"biocoscientist_{timestamp}.log"
-    
-    # Root logger 설정
+    if not experiment_name:
+        experiment_name = f"experiment_{timestamp}"
+    else:
+        # Add timestamp to experiment name
+        experiment_name = f"{experiment_name}_{timestamp}"
+
+    # Session directory: logs/<project_name_timestamp>/
+    session_dir = Path("./logs") / experiment_name
+    session_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create RAs subdirectory for RequirementAnswer configs
+    ras_dir = session_dir / "RAs"
+    ras_dir.mkdir(exist_ok=True)
+
+    # ========== Dual logging: Console + Full Terminal Log ==========
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
-    
-    # 파일 핸들러
-    file_handler = logging.FileHandler(log_file, encoding='utf-8')
+    root_logger.handlers = []  # Clear existing handlers
+
+    # Console handler - show progress to user
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_formatter = logging.Formatter('%(levelname)s - %(message)s')
+    console_handler.setFormatter(console_formatter)
+    root_logger.addHandler(console_handler)
+
+    # File handler - save all terminal output to full_terminal.log
+    terminal_log_file = session_dir / "full_terminal.log"
+    file_handler = logging.FileHandler(terminal_log_file, mode='w', encoding='utf-8')
     file_handler.setLevel(logging.INFO)
     file_formatter = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
     file_handler.setFormatter(file_formatter)
-    
-    # 콘솔 핸들러
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_formatter = logging.Formatter('%(levelname)s - %(message)s')
-    console_handler.setFormatter(console_formatter)
-    
-    # 핸들러 추가
     root_logger.addHandler(file_handler)
-    root_logger.addHandler(console_handler)
-    
-    # httpx 로거는 WARNING 레벨로 설정 (HTTP 요청 로그 제거)
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    
-    return log_file
+
+    # ========== Suppress noisy external libraries ==========
+    logging.getLogger("httpx").setLevel(logging.ERROR)
+    logging.getLogger("httpcore").setLevel(logging.ERROR)
+
+    return session_dir
 
 # Support both relative imports (when used as module) and absolute imports (when run directly)
 try:
-    from .core import ResearchGoal, Hypothesis, ProblemType
+    from .core import ResearchGoal
     from .agents import SupervisorAgent
-    from .problems import (
-        GeneSimilarityHandler,
-        RNAStabilityHandler,
-        ProteinBinderHandler,
-        TargetDiscoveryHandler,
-        DrugRepositioningHandler
-    )
+    from .tools.registry import ToolRegistry
+    from .prompts.prompt_manager import PromptManager
 except ImportError:
     # Add parent directory to path for direct execution
     sys.path.insert(0, str(Path(__file__).parent.parent))
-    from biocoscientist.core import ResearchGoal, Hypothesis, ProblemType
+    from biocoscientist.core import ResearchGoal
     from biocoscientist.agents import SupervisorAgent
-    from biocoscientist.problems import (
-        GeneSimilarityHandler,
-        RNAStabilityHandler,
-        ProteinBinderHandler,
-        TargetDiscoveryHandler,
-        DrugRepositioningHandler
-    )
+    from biocoscientist.tools.registry import ToolRegistry
+    from biocoscientist.prompts.prompt_manager import PromptManager
 
 logger = logging.getLogger(__name__)
 
 
 class BioCoScientist:
     """
-    Bio AI Co-Scientist - Multi-problem biomedical research assistant
+    Bio AI Co-Scientist - Problem-Agnostic Biomedical Research Assistant
     
-    Supports 5 problem types:
-    1. Gene Function Similarity Analysis
-    2. RNA Stability Mechanism Investigation
-    3. Protein Binder Design
-    4. Therapeutic Target Discovery
-    5. Drug Repositioning
+    New Architecture:
+    - Dynamic research planning based on LLM analysis of research goals
+    - Adaptive task generation and worker management
+    - No predefined problem types - handles any biomedical research question
     """
     
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[Dict[str, Any]] = None, session_dir: Optional[Path] = None):
         """Initialize the Bio AI Co-Scientist system"""
         self.config = config or self.default_config()
+        
+        # Store session directory for logging
+        self.session_dir = session_dir
+        if session_dir:
+            self.config["session_dir"] = str(session_dir)
+        
+        # Initialize new supervisor
         self.supervisor = SupervisorAgent(self.config)
         self.logger = logging.getLogger("BioCoScientist")
-        self.logger.info("="*80)
-        self.logger.info("BioCoScientist System Initialized")
-        self.logger.info("="*80)
-        
-        # Initialize problem-specific handlers
-        self.problem_handlers = {
-            ProblemType.GENE_SIMILARITY: GeneSimilarityHandler(),
-            ProblemType.RNA_STABILITY: RNAStabilityHandler(),
-            ProblemType.PROTEIN_BINDER: ProteinBinderHandler(),
-            ProblemType.TARGET_DISCOVERY: TargetDiscoveryHandler(),
-            ProblemType.DRUG_REPOSITIONING: DrugRepositioningHandler()
-        }
-        
-        self.logger.info("Bio AI Co-Scientist system initialized")
     
     @staticmethod
     def default_config() -> Dict[str, Any]:
@@ -129,7 +133,7 @@ class BioCoScientist:
                 "max_tokens": 8192
             },
             "generation": {
-                "techniques": ["literature", "debate", "assumptions", "expansion"]
+                "techniques": ["data", "assumptions", "expansion"]
             },
             "reflection": {
                 "review_types": ["initial", "full", "deep_verification", "observation", "simulation"]
@@ -148,128 +152,50 @@ class BioCoScientist:
                 "overview_format": "standard"
             }
         }
-    
-    async def research(
-        self,
-        goal_description: str,
-        domain: str,
-        focus_areas: List[str],
-        problem_type: Optional[ProblemType] = None,
-        max_iterations: int = 10,
-        **kwargs
-    ) -> Dict[str, Any]:
-        """
-        Conduct automated research for a given goal.
+
+    async def research_from_file(self, problem_file: str, **kwargs) -> Dict[str, Any]:
+        """Start research directly from a problem file.
         
         Args:
-            goal_description: Description of the research goal
-            domain: Research domain (e.g., "biology", "bioinformatics")
-            focus_areas: List of specific focus areas
-            problem_type: Specific problem type (auto-detected if None)
-            max_iterations: Maximum number of research iterations
-            **kwargs: Additional configuration options
+            problem_file: Path to the problem description file
+            **kwargs: Additional research parameters (max_iterations, etc.)
         
         Returns:
-            Research results including top hypotheses and overview
+            Research results
         """
-        self.logger.info(f"Starting research: {goal_description}")
+        # Read problem file
+        with open(problem_file, 'r', encoding='utf-8') as f:
+            problem_text = f.read()
         
-        # Auto-detect problem type if not specified
-        if problem_type is None:
-            problem_type = self._detect_problem_type(goal_description, domain, focus_areas)
-            self.logger.info(f"Auto-detected problem type: {problem_type.value}")
-        
-        # Create research goal
+        # Create a simple research goal - ConfigurationAgent will do the detailed parsing
         research_goal = ResearchGoal(
-            goal_id=f"goal_{datetime.now().timestamp()}",
-            description=goal_description,
-            domain=domain,
-            focus_areas=focus_areas,
-            constraints=kwargs.get("constraints", {}),
-            success_criteria=kwargs.get("success_criteria", []),
-            created_at=datetime.now(),
-            problem_type=problem_type
+            description=problem_text.strip(),
+            domain="Biomedical Research",
+            focus_areas=[],  # ConfigurationAgent will extract these
+            constraints={},
+            success_criteria=[],
+            metadata={"source_file": problem_file}
         )
         
-        # Get problem-specific handler
-        handler = self.problem_handlers.get(problem_type)
-        
-        # Add problem-specific context to config
-        if handler:
-            self.config["problem_handler"] = handler
-            self.config["problem_type"] = problem_type
-            self.logger.info(f"Using handler: {handler.problem_type}")
-        
-        # Run research cycle
-        results = await self.supervisor.run_research_cycle(
+        # Run Sequential Confirmation research
+        user_preferences = {
+            "max_iterations": kwargs.get("max_iterations", 3)
+        }
+
+        results = await self.supervisor.run_sequential_confirmation(
             research_goal=research_goal,
-            max_iterations=max_iterations,
-            hypotheses_per_iteration=kwargs.get("hypotheses_per_iteration", 10)
+            user_preferences=user_preferences
         )
-        
-        # Add problem-specific validation
-        if handler:
-            results["expected_outputs"] = handler.get_expected_outputs(research_goal)
-            results["domain_knowledge"] = handler.get_domain_knowledge()
-        
-        # problem_type을 인스턴스에 저장 (보고서 생성 시 사용)
-        self.problem_type = problem_type
-        
-        self.logger.info("Research complete")
-        
+
         return results
-    
-    def _detect_problem_type(
-        self,
-        description: str,
-        domain: str,
-        focus_areas: List[str]
-    ) -> ProblemType:
-        """
-        Auto-detect problem type from description and focus areas
-        """
-        text = f"{description} {domain} {' '.join(focus_areas)}".lower()
-        
-        # Gene similarity indicators
-        if any(term in text for term in ["gene similarity", "gene function", "expression correlation", "t cell gene"]):
-            return ProblemType.GENE_SIMILARITY
-        
-        # RNA stability indicators  
-        if any(term in text for term in ["rna stability", "poly(a)", "cre", "nanopore", "drna-seq", "mrna stabilization"]):
-            return ProblemType.RNA_STABILITY
-        
-        # Protein binder indicators
-        if any(term in text for term in ["binder design", "mini-binder", "protein binder", "tnfr", "binding affinity", "kd <"]):
-            return ProblemType.PROTEIN_BINDER
-        
-        # Target discovery indicators
-        if any(term in text for term in ["target discovery", "il-11", "fibrosis", "ppi network", "therapeutic target"]):
-            return ProblemType.TARGET_DISCOVERY
-        
-        # Drug repositioning indicators
-        if any(term in text for term in ["drug repositioning", "exhaustion", "signature reversal", "drug repurposing"]):
-            return ProblemType.DRUG_REPOSITIONING
-        
-        # Default to gene similarity if unclear
-        self.logger.warning("Could not auto-detect problem type, defaulting to GENE_SIMILARITY")
-        return ProblemType.GENE_SIMILARITY
-    
-    def get_research_overview(self) -> Dict[str, Any]:
-        """Get the latest research overview"""
-        overview = self.supervisor.memory.research_overviews[-1] if self.supervisor.memory.research_overviews else None
-        return overview
-    
-    def get_top_hypotheses(self, n: int = 10) -> List[Hypothesis]:
-        """Get top N hypotheses by ranking"""
-        return self.supervisor.memory.get_top_hypotheses(n)
-    
-    def get_problem_handler(self, problem_type: ProblemType):
-        """Get handler for specific problem type"""
-        return self.problem_handlers.get(problem_type)
-    
-    def list_problem_types(self) -> List[str]:
-        """List all supported problem types"""
-        return [pt.value for pt in ProblemType]
+
+    def get_confirmed_answers(self) -> Dict[str, Any]:
+        """Get all confirmed RequirementAnswers"""
+        return self.supervisor.memory.get_all_confirmed_answers()
+
+    def get_best_answers(self) -> Dict[str, Any]:
+        """Get the best answer for each requirement"""
+        return self.supervisor.memory.get_best_answer_per_requirement()
     
     async def parse_problem_file(self, file_path: str) -> Dict[str, Any]:
         """
@@ -281,40 +207,32 @@ class BioCoScientist:
         Returns:
             Dictionary with goal_description, domain, focus_areas, constraints, success_criteria
         """
-        print(f"[DEBUG] 1. Starting parse_problem_file: {file_path}")
         self.logger.info(f"Parsing problem file: {file_path}")
         
         # Read file content
-        print(f"[DEBUG] 2. Reading file...")
         with open(file_path, 'r', encoding='utf-8') as f:
             problem_text = f.read()
-        print(f"[DEBUG] 3. File read complete, length: {len(problem_text)}")
         
         # Use LLM to extract structured information
-        print(f"[DEBUG] 4. Importing LLMClient...")
         try:
-            from .clients import LLMClient
+            from .external_apis import LLMClient
         except ImportError:
-            from biocoscientist.clients import LLMClient
+            from biocoscientist.external_apis import LLMClient
         
-        print(f"[DEBUG] 5. Creating LLMClient...")
         llm_config = self.config.get("llm", {})
-        print(f"[DEBUG] 6. LLM config provider: {llm_config.get('provider')}, model: {llm_config.get('model')}")
         
         # API 키 가져오기 - config에서 이미 환경변수 읽어서 저장됨
         api_key = llm_config.get("api_key")
         if not api_key:
-            print(f"[DEBUG] ❌ No API key found - please set OPENROUTER_API_KEY in .env file")
-            print(f"[DEBUG] Using fallback parsing without LLM")
+            self.logger.warning("No API key available, using basic parsing")
             return {
-                "goal_description": problem_text[:500],
+                "goal_description": problem_text.strip(),
                 "domain": "Biomedical Research",
                 "focus_areas": ["Analysis", "Research"],
                 "constraints": {},
-                "success_criteria": ["Complete analysis"]
+                "success_criteria": ["Complete analysis"],
+                "metadata": {}
             }
-        
-        print(f"[DEBUG] ✅ API key found: {api_key[:20]}...")
         
         try:
             llm_client = LLMClient(
@@ -324,7 +242,6 @@ class BioCoScientist:
                 temperature=llm_config.get("temperature", 0.7),
                 max_tokens=llm_config.get("max_tokens", 8192)
             )
-            print(f"[DEBUG] 7. LLMClient created successfully")
         except Exception as e:
             print(f"[DEBUG] LLMClient creation failed: {e}")
             raise
@@ -352,207 +269,167 @@ class BioCoScientist:
 - goal_description은 핵심 목표만 간결하게
 - focus_areas는 3-5개 정도의 구체적인 영역
 - constraints는 문제에서 명시된 제약조건이나 요구사항
-- success_criteria는 평가 기준이나 달성 목표
+- success_criteria는 보고서에 포함될 내용이 다 포함되었는지 확인하는 기준
 """
         
-        print(f"[DEBUG] 8. Starting LLM API call...")
         try:
             result = await llm_client.generate_json(
                 messages=[{"role": "user", "content": extraction_prompt}],
                 system="You are an expert in biomedical research problem analysis. Extract structured information accurately."
             )
             
-            print(f"[DEBUG] 9. LLM API call successful")
+            # Ensure metadata field exists
+            if "metadata" not in result:
+                result["metadata"] = {}
+            
             self.logger.info("Successfully parsed problem file")
             self.logger.debug(f"Extracted: {result}")
             
             return result
             
         except Exception as e:
-            print(f"[DEBUG] 10. LLM API call failed: {e}")
-            self.logger.error(f"Failed to parse problem file: {e}")
+            self.logger.error(f"Failed to parse problem file with LLM: {e}")
             # Fallback to basic extraction
-            print(f"[DEBUG] 11. Using fallback parsing")
             return {
-                "goal_description": problem_text[:500],
+                "goal_description": problem_text.strip(),
                 "domain": "Biomedical Research",
                 "focus_areas": ["Analysis", "Research"],
                 "constraints": {},
-                "success_criteria": ["Complete analysis"]
+                "success_criteria": ["Complete analysis"],
+                "metadata": {}
             }
     
-    def export_results(self, output_path: str) -> None:
-        """Export research results to file"""
+    def export_results(self, results: Dict[str, Any], output_path: str) -> None:
+        """Export research results to file with full memory data for report generation"""
         import json
         from pathlib import Path
-        
-        results = {
-            "hypotheses": [h.__dict__ for h in self.supervisor.memory.hypotheses.values()],
-            "reviews": [r.__dict__ for r in self.supervisor.memory.reviews.values()],
-            "overviews": self.supervisor.memory.research_overviews
+
+        # Get full memory data for comprehensive report generation
+        memory_data = self.supervisor.memory.export_to_dict()
+
+        # Convert results to exportable format
+        export_data = {
+            "research_config": results.get("research_config", {}),
+            "final_metrics": results.get("final_metrics", {}),
+            "top_hypotheses": results.get("top_hypotheses", []),
+            "execution_stats": results.get("execution_stats", {}),
+            "research_goal": {
+                "description": getattr(self, 'research_goal', ResearchGoal(description="")).description,
+                "domain": getattr(self, 'research_goal', ResearchGoal(description="")).domain
+            },
+            # Full memory data for ReportGenerator
+            "hypotheses": memory_data.get("hypotheses", []),
+            "reviews": memory_data.get("reviews", []),
+            "overviews": memory_data.get("overviews", []),
+            "tournament_matches": memory_data.get("tournament_matches", []),
+            "meta_reviews": memory_data.get("meta_reviews", [])
         }
-        
+
         with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(results, f, indent=2, ensure_ascii=False, default=str)
-        
+            json.dump(export_data, f, indent=2, ensure_ascii=False, default=str)
+
         self.logger.info(f"Results exported to {output_path}")
+        self.logger.info(f"  - {len(export_data['hypotheses'])} hypotheses")
+        self.logger.info(f"  - {len(export_data['reviews'])} reviews")
+        self.logger.info(f"  - {len(export_data['overviews'])} overviews")
         
         # 보고서 자동 생성
         try:
-            from biocoscientist.utils.report_generator import generate_report_from_json
-            import re
-            
+            from biocoscientist.utils.report_generator import (
+                generate_final_research_report,
+                generate_report_from_json
+            )
+
             # reports 폴더 경로 생성
             reports_dir = Path("reports")
             reports_dir.mkdir(exist_ok=True)
-            
-            # 로그 파일명에서 타임스탬프 추출 (biocoscientist_YYYYMMDD_HHMMSS.log)
-            log_files = sorted(Path("logs").glob("biocoscientist_*.log"), reverse=True)
-            if log_files:
-                log_name = log_files[0].stem  # biocoscientist_20251215_055156
-                timestamp = log_name.replace("biocoscientist_", "")  # 20251215_055156
-            else:
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            
-            # problem_type 가져오기
-            problem_type = getattr(self, 'problem_type', 'research')
-            if hasattr(problem_type, 'value'):
-                problem_type = problem_type.value
-            
-            # 파일명 형식: BioCoScientist_Report_{problem_type}_{timestamp}.txt
-            report_name = f"BioCoScientist_Report_{problem_type}_{timestamp}"
-            
-            # Full 보고서 생성
-            full_report_path = str(reports_dir / f"{report_name}.txt")
-            generate_report_from_json(output_path, full_report_path, "full")
-            self.logger.info(f"Full report generated: {full_report_path}")
-            
-            # Summary 보고서 생성
-            summary_report_path = str(reports_dir / f"{report_name}_summary.txt")
-            generate_report_from_json(output_path, summary_report_path, "summary")
-            self.logger.info(f"Summary report generated: {summary_report_path}")
-            
+
+            # 타임스탬프 생성
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+            # 파일명 형식: BioCoScientist_Report_research_{timestamp}
+            report_name = f"BioCoScientist_Report_research_{timestamp}"
+
+            # ★ NEW: 최고 가설 중심 연구 보고서 생성 (Markdown)
+            # results dict에서 직접 best_hypothesis 등 확장 데이터 사용
+            final_report_path = str(reports_dir / f"{report_name}_FINAL.md")
+            generate_final_research_report(results, final_report_path)
+            self.logger.info(f"Final research report generated: {final_report_path}")
+
+            # Legacy: 통계 중심 보고서 (기존 형식 유지)
+            legacy_report_path = str(reports_dir / f"{report_name}_statistics.txt")
+            generate_report_from_json(output_path, legacy_report_path, "full")
+            self.logger.info(f"Statistics report generated: {legacy_report_path}")
+
             print(f"\n📊 Reports Generated:")
-            print(f"  - Full Report: {full_report_path}")
-            print(f"  - Summary Report: {summary_report_path}")
-            
+            print(f"  - 📄 Final Research Report: {final_report_path}")
+            print(f"  - 📈 Statistics Report: {legacy_report_path}")
+
         except Exception as e:
             self.logger.error(f"Failed to generate reports: {e}")
             print(f"⚠️  Report generation failed: {e}")
 
 
 # ============================================================================
-# Example Usage
+# Main Execution
 # ============================================================================
 
-async def main(problem_file_path: str = None):
+async def main(problem_file: str, session_dir: Path):
     """
-    Example usage of the Bio AI Co-Scientist system with dynamic problem file parsing.
-    
+    Main execution function - simplified to just run research from file
+
     Args:
-        problem_file_path: Path to problem description file (e.g., 'problems/tnbc_minibinder.txt')
-                          If None, uses default static example
+        problem_file: Path to problem description file
+        session_dir: Session directory for logs (created by setup_logging)
     """
+    # Create BioCoScientist instance with provided session_dir
+    bio_coscientist = BioCoScientist(session_dir=session_dir)
     
-    # Initialize the system
-    bio_coscientist = BioCoScientist()
-    
-    # Parse problem file if provided, otherwise use static example
-    if problem_file_path:
-        print(f"\n📄 Parsing problem file: {problem_file_path}")
-        problem_params = await bio_coscientist.parse_problem_file(problem_file_path)
-        
-        goal_description = problem_params["goal_description"]
-        domain = problem_params["domain"]
-        focus_areas = problem_params["focus_areas"]
-        constraints = problem_params.get("constraints", {})
-        success_criteria = problem_params.get("success_criteria", [])
-        
-        print("\n✅ Extracted Parameters:")
-        print(f"  Goal: {goal_description[:100]}...")
-        print(f"  Domain: {domain}")
-        print(f"  Focus Areas: {focus_areas}")
-        print(f"  Constraints: {constraints}")
-        print(f"  Success Criteria: {success_criteria}")
-    else:
-        # Fallback to static example
-        print("\n📝 Using static example (Protein Binder Design)")
-        goal_description = """
-        Design AI-based mini-binder therapeutics targeting TNFR1/2 for Triple-Negative 
-        Breast Cancer (TNBC) treatment by modulating TNFα-ΔNp63α signaling axis.
-        """
-        
-        domain = "Protein Engineering & Drug Discovery"
-        focus_areas = [
-            "AI-based protein binder design",
-            "TNFR1/2 selective targeting",
-            "Binding affinity optimization (KD, kon, koff)",
-            "Off-target receptor screening"
-        ]
-        constraints = {
-            "binder_type": "mini-binder",
-            "target_receptors": "TNFR1 and/or TNFR2",
-            "affinity_target": "KD < 10 nM"
-        }
-        success_criteria = [
-            "High TNFR binding specificity",
-            "Minimal off-target effects",
-            "Low immunogenicity"
-        ]
-    
-    # Run research (problem type auto-detected)
-    print("\n🚀 Starting research...\n")
-    results = await bio_coscientist.research(
-        goal_description=goal_description,
-        domain=domain,
-        focus_areas=focus_areas,
-        max_iterations=2,
-        hypotheses_per_iteration=5,
-        constraints=constraints,
-        success_criteria=success_criteria
-    )
+    # Run research from file - ConfigurationAgent handles all parsing
+    results = await bio_coscientist.research_from_file(problem_file)
     
     # Display results
     print("\n" + "="*80)
-    print("RESEARCH COMPLETE")
+    print("✅ RESEARCH COMPLETE")
     print("="*80)
-    print(f"\nProblem Type: {results.get('problem_type', 'N/A')}")
-    print(f"Total hypotheses generated: {results['total_hypotheses']}")
-    print(f"Iterations completed: {results['iterations_completed']}")
     
-    print("\n--- Top 5 Hypotheses ---")
-    for i, hyp in enumerate(results['top_hypotheses'][:5], 1):
-        print(f"\n{i}. [{hyp.id}]")
-        print(f"   Summary: {hyp.summary}")
-        print(f"   Elo Rating: {hyp.elo_rating:.1f}")
-        print(f"   Status: {hyp.status.value}")
+    final_metrics = results.get('final_metrics', {})
+    execution_stats = results.get('execution_stats', {})
+    
+    print(f"\n📊 Research Metrics:")
+    print(f"  Total Hypotheses: {final_metrics.get('total_hypotheses', 0)}")
+    print(f"  Reviewed: {final_metrics.get('reviewed_hypotheses', 0)}")
+    print(f"  Passed Review: {final_metrics.get('passed_hypotheses', 0)}")
+    print(f"  Average ELO: {final_metrics.get('avg_elo_rating', 0):.1f}")
+    
+    print(f"\n⚙️ Execution Stats:")
+    print(f"  Iterations: {execution_stats.get('iterations', 0)}")
+    print(f"  Duration: {execution_stats.get('duration_seconds', 0):.1f}s")
     
     # Export results
-    bio_coscientist.export_results("research_results.json")
+    bio_coscientist.export_results(results, "research_results.json")
 
 
 if __name__ == "__main__":
     import asyncio
     import sys
     
-    # 로깅 설정
-    log_file = setup_logging()
+    if len(sys.argv) < 2:
+        print("\n⚠️  Usage: python biocoscientist.py <problem_file.txt>")
+        print("   Example: python biocoscientist.py problems/minibinder_design.txt")
+        sys.exit(1)
     
-    # Get problem file path from command line argument
-    problem_file = sys.argv[1] if len(sys.argv) > 1 else None
+    problem_file = sys.argv[1]
     
-    if problem_file:
-        print(f"\n{'='*80}")
-        print(f"🔬 BioCoScientist - Dynamic Problem Solving")
-        print(f"{'='*80}")
-        print(f"Problem File: {problem_file}")
-        print(f"📋 Log File: {log_file}")
-    else:
-        print(f"\n{'='*80}")
-        print(f"🔬 BioCoScientist - Static Example Mode")
-        print(f"{'='*80}")
-        print("Usage: python biocoscientist.py <problem_file.txt>")
-        print("Running with default static example...")
-        print(f"📋 Log File: {log_file}")
-    
-    asyncio.run(main(problem_file))
+    # Extract project name from problem file and setup logging
+    project_name = Path(problem_file).stem
+    session_dir = setup_logging(experiment_name=project_name)
+
+    print(f"\n📁 Project: {project_name}")
+    print(f"📂 Session directory: {session_dir}")
+    print(f"📝 Logs:")
+    print(f"   - Full terminal: {session_dir / 'full_terminal.log'}")
+    print(f"   - Supervisor:    {session_dir / 'supervisor.log'}")
+    print(f"⚙️  Config: {session_dir / 'config.json'}\n")
+
+    asyncio.run(main(problem_file, session_dir))

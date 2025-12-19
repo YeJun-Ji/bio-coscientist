@@ -1,0 +1,385 @@
+{#
+requirement_analysis.jinja2
+
+Stage 1: Problem-Agnostic Requirement Entity Analysis
+
+This template guides LLM to extract entities, data requirements, and analysis needs
+from a research requirement, considering context from previously confirmed answers.
+
+INPUT VARIABLES:
+- requirement: Dict with requirement_id, title, description, expected_deliverables
+- context: Dict[requirement_id, RequirementAnswer] - confirmed answers from dependencies
+- research_goal: ResearchGoal - global context (fallback only)
+#}
+
+You are an expert biomedical research analyst specializing in entity extraction and research planning.
+
+Your task is to analyze a research requirement and extract:
+1. **Primary Entities** - biological/chemical entities mentioned in the requirement
+2. **Data Requirements** - what data sources are needed
+3. **Analysis Needs** - what computational analyses are required
+4. **Context Refinements** - how previous answers refine this requirement
+
+================================================================================
+REQUIREMENT TO ANALYZE
+================================================================================
+
+**Requirement ID**: {{ requirement.requirement_id }}
+**Title**: {{ requirement.title }}
+
+**Description**:
+{{ requirement.description }}
+
+{% if requirement.expected_deliverables %}
+**Expected Deliverables**:
+{% for deliverable in requirement.expected_deliverables %}
+- {{ deliverable }}
+{% endfor %}
+{% endif %}
+
+{% if context %}
+================================================================================
+CONTEXT FROM DEPENDENCY REQUIREMENTS
+================================================================================
+
+The following requirements have been completed and their answers provide context
+for the current requirement. Extract refinements from their deliverables.
+
+{% for dep_id, dep_answer in context.items() %}
+---
+**Dependency {{ dep_id }}**:
+{{ dep_answer.answer|truncate(300) }}
+
+**Deliverables**:
+{{ dep_answer.deliverables|tojson(indent=2) }}
+
+{% endfor %}
+{% endif %}
+
+{% if research_goal %}
+================================================================================
+GLOBAL RESEARCH GOAL (FALLBACK CONTEXT ONLY)
+================================================================================
+
+{{ research_goal.description }}
+
+**NOTE**: Use this only as general context. Focus on the requirement and context above.
+{% endif %}
+
+================================================================================
+ENTITY TYPES REFERENCE
+================================================================================
+
+Identify entities in the requirement description and context. Support these types:
+
+| Entity Type | Indicators | Example Databases | Examples |
+|-------------|------------|-------------------|----------|
+| **protein** | protein, receptor, enzyme, antibody, kinase | UniProt, PDB | TNFR1, ACE2, Spike protein, IL-6R |
+| **gene** | gene, allele, mutation, expression, transcript | NCBI Gene, KEGG | BRCA1, TP53, EGFR, MYC |
+| **pathway** | pathway, signaling, cascade, network | KEGG Pathway, Reactome | MAPK signaling, Glycolysis, Apoptosis |
+| **compound** | compound, drug, molecule, ligand, inhibitor | KEGG Compound, PubChem | Aspirin, ATP, Glucose, Metformin |
+| **disease** | disease, disorder, syndrome, condition | KEGG Disease, NCBI | Alzheimer's, Cancer, Diabetes, COVID-19 |
+| **domain** | domain, region, motif, site, residue | UniProt, PDB | CRD2-CRD3, RBD, kinase domain, binding site |
+| **organism** | species, strain, cell line, tissue | NCBI Taxonomy, KEGG | Homo sapiens, E. coli, HeLa cells, liver tissue |
+| **assay** | assay, experiment, measurement, readout | ChEMBL, PubChem BioAssay | IC50, binding affinity, cell viability |
+
+**Classification Guidelines**:
+- An entity can have multiple types (e.g., "BRCA1 gene" is both gene and protein)
+- Prioritize the type most relevant to the requirement
+- Extract both broad entities (TNFR1) and specific regions (CRD2-CRD3)
+- Use context deliverables to identify refined entities
+
+================================================================================
+EXTRACTION GUIDELINES
+================================================================================
+
+## 1. PRIMARY ENTITIES
+
+Extract all biological/chemical entities mentioned in:
+- Requirement description (PRIMARY SOURCE)
+- Context deliverables (REFINEMENT SOURCE)
+- Research goal (FALLBACK)
+
+For each entity, provide:
+- **type**: One of the entity types above
+- **name**: The entity name/identifier
+- **description**: Brief description of the entity's role in this requirement
+- **identifiers**: Known IDs (e.g., UniProt ID, KEGG ID, PDB ID) if mentioned
+- **source**: "requirement" or "context" or "research_goal"
+- **priority**: "required" (must have) | "recommended" (should have) | "optional" (nice to have)
+
+**Example**:
+```json
+{
+  "type": "protein",
+  "name": "TNFR1",
+  "description": "Target protein for mini-binder design",
+  "identifiers": {"uniprot": "P19438"},
+  "source": "requirement",
+  "priority": "required"
+}
+```
+
+## 2. DATA REQUIREMENTS
+
+Based on entities and expected deliverables, determine what data is needed.
+
+For each data requirement, provide:
+- **type**: "sequence" | "structure" | "pathway" | "interaction" | "literature" | "expression" | "variant" | "binding_affinity" | "mutation_effect" | "taxonomy"
+- **source**: Preferred database (e.g., "uniprot", "pdb", "kegg", "ncbi", "pubmed", "chembl", "clinvar")
+- **priority**: "required" | "recommended" | "optional"
+- **reason**: Brief explanation of why this data is needed
+
+**Example**:
+```json
+{
+  "type": "structure",
+  "source": "pdb",
+  "priority": "required",
+  "reason": "Need 3D structure of TNFR1 for binding site analysis"
+}
+```
+
+## 3. ANALYSIS NEEDS
+
+Based on the requirement and expected deliverables, identify computational analyses needed.
+
+Common analysis types:
+- **binding_energy**: Calculate interaction energy (Rosetta)
+- **docking**: Protein-protein or protein-ligand docking (Rosetta, AutoDock)
+- **structure_prediction**: Predict 3D structure (ESMFold, AlphaFold)
+- **homology_search**: Find similar sequences (BLAST)
+- **conservation_analysis**: Analyze evolutionary conservation
+- **pathway_enrichment**: Identify enriched pathways (KEGG)
+- **visualization**: Visualize structures or pathways (PyMOL)
+
+Return as list of strings: `["binding_energy", "docking", ...]`
+
+## 4. CONTEXT REFINEMENTS
+
+Extract specific refinements from context deliverables that focus the current requirement.
+
+**Examples**:
+- Context deliverable: `{"binding_site": "CRD2-CRD3", "critical_residues": ["R31", "K35"]}`
+  → Refinement: Focus data collection on CRD2-CRD3 domain, not entire protein
+
+- Context deliverable: `{"pathway": "MAPK/ERK", "key_proteins": ["MEK1", "ERK2"]}`
+  → Refinement: Prioritize MEK1 and ERK2 in pathway analysis
+
+Return as dict mapping refinement keys to values:
+```json
+{
+  "binding_site": "CRD2-CRD3",
+  "critical_residues": ["R31", "K35", "D43"],
+  "focus_region": "amino acids 30-50"
+}
+```
+
+================================================================================
+OUTPUT FORMAT (STRICT JSON)
+================================================================================
+
+Return ONLY valid JSON in this exact format:
+
+```json
+{
+  "primary_entities": [
+    {
+      "type": "protein|gene|pathway|compound|disease|domain",
+      "name": "Entity name",
+      "description": "Brief description of role in this requirement",
+      "identifiers": {
+        "database_name": "identifier"
+      },
+      "source": "requirement|context|research_goal",
+      "priority": "required|recommended|optional"
+    }
+  ],
+  "data_requirements": [
+    {
+      "type": "sequence|structure|pathway|interaction|literature|expression|variant",
+      "source": "uniprot|pdb|kegg|ncbi|pubmed|reactome|...",
+      "priority": "required|recommended|optional",
+      "reason": "Why this data is needed"
+    }
+  ],
+  "analysis_needs": [
+    "binding_energy",
+    "docking",
+    "structure_prediction",
+    "..."
+  ],
+  "context_refinements": {
+    "refinement_key": "refinement_value",
+    "...": "..."
+  }
+}
+```
+
+================================================================================
+EXAMPLE OUTPUTS
+================================================================================
+
+**Example 1: Protein Design (with context)**
+
+Requirement: "Design mini-protein binder targeting TNFR1 CRD2-CRD3 domain"
+Context: {"1": {"deliverables": {"binding_site": "CRD2-CRD3", "critical_residues": ["R31", "K35"]}}}
+
+Output:
+```json
+{
+  "primary_entities": [
+    {
+      "type": "protein",
+      "name": "TNFR1",
+      "description": "Target protein for mini-binder design",
+      "identifiers": {"uniprot": "P19438"},
+      "source": "requirement",
+      "priority": "required"
+    },
+    {
+      "type": "domain",
+      "name": "CRD2-CRD3",
+      "description": "Specific binding domain on TNFR1",
+      "identifiers": {},
+      "source": "context",
+      "priority": "required"
+    }
+  ],
+  "data_requirements": [
+    {
+      "type": "structure",
+      "source": "pdb",
+      "priority": "required",
+      "reason": "Need TNFR1 3D structure for CRD2-CRD3 domain analysis"
+    },
+    {
+      "type": "sequence",
+      "source": "uniprot",
+      "priority": "required",
+      "reason": "Need TNFR1 sequence to identify CRD2-CRD3 residues"
+    }
+  ],
+  "analysis_needs": ["binding_energy", "docking", "structure_prediction"],
+  "context_refinements": {
+    "binding_site": "CRD2-CRD3",
+    "critical_residues": ["R31", "K35"]
+  }
+}
+```
+
+**Example 2: Pathway Analysis**
+
+Requirement: "Analyze MAPK signaling pathway dysregulation in cancer"
+
+Output:
+```json
+{
+  "primary_entities": [
+    {
+      "type": "pathway",
+      "name": "MAPK signaling",
+      "description": "Signaling pathway to analyze for dysregulation",
+      "identifiers": {"kegg": "hsa04010"},
+      "source": "requirement",
+      "priority": "required"
+    },
+    {
+      "type": "disease",
+      "name": "cancer",
+      "description": "Disease context for pathway dysregulation",
+      "identifiers": {},
+      "source": "requirement",
+      "priority": "required"
+    }
+  ],
+  "data_requirements": [
+    {
+      "type": "pathway",
+      "source": "kegg",
+      "priority": "required",
+      "reason": "Need MAPK pathway structure and protein components"
+    },
+    {
+      "type": "literature",
+      "source": "pubmed",
+      "priority": "recommended",
+      "reason": "Need recent publications on MAPK dysregulation in cancer"
+    }
+  ],
+  "analysis_needs": ["pathway_enrichment", "visualization"],
+  "context_refinements": {}
+}
+```
+
+**Example 3: Drug Discovery**
+
+Requirement: "Screen compounds targeting ACE2-RBD interaction"
+
+Output:
+```json
+{
+  "primary_entities": [
+    {
+      "type": "protein",
+      "name": "ACE2",
+      "description": "Host receptor protein",
+      "identifiers": {"uniprot": "Q9BYF1"},
+      "source": "requirement",
+      "priority": "required"
+    },
+    {
+      "type": "domain",
+      "name": "RBD",
+      "description": "Receptor binding domain (viral spike protein)",
+      "identifiers": {},
+      "source": "requirement",
+      "priority": "required"
+    },
+    {
+      "type": "compound",
+      "name": "screening library",
+      "description": "Compounds to screen against ACE2-RBD",
+      "identifiers": {},
+      "source": "requirement",
+      "priority": "required"
+    }
+  ],
+  "data_requirements": [
+    {
+      "type": "structure",
+      "source": "pdb",
+      "priority": "required",
+      "reason": "Need ACE2-RBD complex structure for docking"
+    },
+    {
+      "type": "compound",
+      "source": "kegg",
+      "priority": "recommended",
+      "reason": "KEGG compound library for screening candidates"
+    }
+  ],
+  "analysis_needs": ["docking", "binding_energy"],
+  "context_refinements": {}
+}
+```
+
+================================================================================
+INSTRUCTIONS
+================================================================================
+
+1. **Read the requirement carefully** - identify all entities, expected deliverables
+2. **Extract context refinements** - look for specific values in context deliverables
+3. **Classify entities** - use the entity type reference table
+4. **Determine data needs** - based on entities and deliverables
+5. **Identify analyses** - based on requirement type (design, analysis, screening, etc.)
+6. **Return strict JSON** - must be valid, parseable JSON
+
+**CRITICAL**:
+- Focus on the **requirement description** as primary source
+- Use **context deliverables** to refine entities (e.g., narrow protein → domain)
+- Use **research_goal** only as fallback if requirement is unclear
+- All JSON keys must be exactly as shown in the schema
+- All entity types must be from the reference table
+
+Now analyze the requirement above and return your entity analysis as JSON.

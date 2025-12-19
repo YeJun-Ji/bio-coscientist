@@ -1,41 +1,131 @@
 """
-Prompt Manager - Templates for LLM interactions
+Prompt Manager - Templates for LLM interactions with Jinja2 support
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
+from pathlib import Path
+import logging
+
+try:
+    from jinja2 import Environment, FileSystemLoader, Template, TemplateNotFound
+    JINJA2_AVAILABLE = True
+except ImportError:
+    JINJA2_AVAILABLE = False
+    Template = None
+
+logger = logging.getLogger(__name__)
 
 
 class PromptManager:
-    """Manages prompt templates for various research tasks"""
+    """Manages prompt templates with Jinja2 support for file-based templates"""
     
-    def __init__(self):
-        """Initialize prompt templates"""
-        self.templates = {}
-    
-    def get(self, prompt_name: str, **kwargs) -> str:
+    def __init__(self, template_dir: Optional[str] = None):
         """
-        Get a prompt template and format it with provided arguments
+        Initialize prompt manager
         
         Args:
-            prompt_name: Name of the prompt template
-            **kwargs: Variables to format into the template
-            
-        Returns:
-            Formatted prompt string
+            template_dir: Directory containing .jinja2 template files
+                         Defaults to biocoscientist/prompts/templates/
         """
-        template = self.templates.get(prompt_name)
-        if not template:
-            # Return a default prompt if specific template not found
-            return self._get_default_prompt(prompt_name, **kwargs)
+        if template_dir is None:
+            template_dir = Path(__file__).parent / "templates"
         
-        try:
-            return template.format(**kwargs)
-        except KeyError as e:
-            raise ValueError(f"Missing required variable for prompt '{prompt_name}': {e}")
+        self.template_dir = Path(template_dir)
+        self.logger = logging.getLogger(self.__class__.__name__)
+        
+        # Cache for compiled templates
+        self._template_cache: Dict[str, Any] = {}
+        
+        # In-memory templates (for backward compatibility and fallback)
+        self.templates: Dict[str, str] = {}
+        
+        # Initialize Jinja2 environment if available
+        if JINJA2_AVAILABLE:
+            self.env = Environment(
+                loader=FileSystemLoader(str(self.template_dir)),
+                trim_blocks=True,
+                lstrip_blocks=True,
+                autoescape=False
+            )
+        else:
+            self.env = None
+            self.logger.warning("Jinja2 not available. Install with: pip install jinja2")
     
-    def get_prompt(self, prompt_name: str, **kwargs) -> str:
-        """Alias for get() method for backward compatibility"""
-        return self.get(prompt_name, **kwargs)
+    def get_prompt(self, prompt_name: str, problem_type: Optional[str] = None, **kwargs) -> str:
+        """
+        Get and render a prompt template
+        
+        Args:
+            prompt_name: Template name (e.g., "generation_data_based" or "generation/data_based")
+            problem_type: Optional problem type for specialized templates (e.g., "protein_binder_design")
+            **kwargs: Variables to inject into template
+        
+        Returns:
+            Rendered prompt string
+        """
+        # Try problem-specific template first (if problem_type provided)
+        if problem_type and self.env:
+            specific_name = f"{prompt_name}_{problem_type}"
+            template = self._load_template(specific_name)
+            if template:
+                try:
+                    return template.render(**kwargs)
+                except Exception as e:
+                    self.logger.error(f"Error rendering template {specific_name}: {e}")
+        
+        # Try general template from file
+        if self.env:
+            template = self._load_template(prompt_name)
+            if template:
+                try:
+                    return template.render(**kwargs)
+                except Exception as e:
+                    self.logger.error(f"Error rendering template {prompt_name}: {e}")
+        
+        # Fallback to in-memory templates
+        if prompt_name in self.templates:
+            template_str = self.templates[prompt_name]
+            try:
+                if JINJA2_AVAILABLE and Template:
+                    return Template(template_str).render(**kwargs)
+                else:
+                    return template_str.format(**kwargs)
+            except Exception as e:
+                self.logger.error(f"Error rendering in-memory template {prompt_name}: {e}")
+        
+        # Last resort: default prompts
+        return self._get_default_prompt(prompt_name, **kwargs)
+    
+    def _load_template(self, template_name: str) -> Optional[Any]:
+        """
+        Load a template from file or cache
+        
+        Args:
+            template_name: Template name (can include directory, e.g., "generation/data_based")
+        
+        Returns:
+            Jinja2 Template object or None
+        """
+        if not self.env:
+            return None
+        
+        # Check cache
+        if template_name in self._template_cache:
+            return self._template_cache[template_name]
+        
+        # Try with .jinja2 extension
+        template_path = f"{template_name}.jinja2"
+        try:
+            template = self.env.get_template(template_path)
+            self._template_cache[template_name] = template
+            self.logger.debug(f"Loaded template: {template_path}")
+            return template
+        except TemplateNotFound:
+            self.logger.debug(f"Template not found: {template_path}")
+            return None
+        except Exception as e:
+            self.logger.error(f"Error loading template {template_path}: {e}")
+            return None
     
     def _get_default_prompt(self, prompt_name: str, **kwargs) -> str:
         """Generate default prompts for common use cases"""
@@ -131,10 +221,3 @@ Provide thorough analysis with specific reasoning for each dimension."""
         except KeyError:
             return template
     
-    def add_template(self, name: str, template: str):
-        """Add or update a prompt template"""
-        self.templates[name] = template
-    
-    def list_templates(self):
-        """List all available prompt templates"""
-        return list(self.templates.keys())

@@ -1,137 +1,385 @@
 """
-Core data structures and enumerations for Bio AI Co-Scientist
+Core data structures for Bio AI Co-Scientist Sequential Confirmation Architecture
+
+This module contains the essential data structures:
+- Requirement: Parsed research requirements
+- RequirementAnswer: Answers to requirements (top-level evaluation unit)
+- ParsedProblem: Complete parsed research problem
+- ResearchGoal: Research goal metadata
+- Paper: Literature reference
 """
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
 from typing import Any, Dict, List, Optional
 
 
-class HypothesisStatus(Enum):
-    """Status of hypothesis in the research pipeline"""
-    GENERATED = "generated"
-    UNDER_REVIEW = "under_review"
-    PASSED_REVIEW = "passed_review"
-    FAILED_REVIEW = "failed_review"
-    REJECTED = "rejected"  # Failed review
-    IN_TOURNAMENT = "in_tournament"  # Ready for ranking
-    ACTIVE = "active"  # Active in research cycle
-    EVOLVED = "evolved"
-    ARCHIVED = "archived"
+# ============================================================================
+# Requirement-Based Problem Parsing Structures
+# ============================================================================
+
+@dataclass
+class Requirement:
+    """
+    Represents a requirement that must be answered.
+    Extracted from problem statements - each (1), (2), etc. becomes a requirement.
+
+    Supports both flat (1, 2, 3) and hierarchical (A.1, A.2, B.1) structures.
+    """
+    requirement_id: str                    # "1", "2", "A", "A.1", "B.2"
+    title: str                             # Short title of the requirement
+    description: str                       # Full description of what needs to be answered
+    parent_id: Optional[str] = None        # "A" for "A.1", None for top-level
+    expected_deliverables: List[str] = field(default_factory=list)
+    depends_on: List[str] = field(default_factory=list)  # Requirement IDs this depends on
+    can_parallelize: bool = True           # Can answer in parallel with others
+    order: int = 0                         # Order within parent
+    requirement_type: str = "answer"       # answer, design, analysis, validation
+    priority: int = 1                      # 1=required, 2=recommended, 3=optional
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "requirement_id": self.requirement_id,
+            "title": self.title,
+            "description": self.description,
+            "parent_id": self.parent_id,
+            "expected_deliverables": self.expected_deliverables,
+            "depends_on": self.depends_on,
+            "can_parallelize": self.can_parallelize,
+            "order": self.order,
+            "requirement_type": self.requirement_type,
+            "priority": self.priority,
+            # Backward compatibility fields
+            "step_id": self.requirement_id,
+            "required_deliverables": self.expected_deliverables,
+            "step_type": self.requirement_type
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Requirement":
+        return cls(
+            requirement_id=data.get("requirement_id", data.get("step_id", "")),
+            title=data.get("title", ""),
+            description=data.get("description", ""),
+            parent_id=data.get("parent_id"),
+            expected_deliverables=data.get("expected_deliverables", data.get("required_deliverables", [])),
+            depends_on=data.get("depends_on", []),
+            can_parallelize=data.get("can_parallelize", True),
+            order=data.get("order", 0),
+            requirement_type=data.get("requirement_type", data.get("step_type", "answer")),
+            priority=data.get("priority", 1)
+        )
+
+    # Backward compatibility properties
+    @property
+    def step_id(self) -> str:
+        return self.requirement_id
+
+    @property
+    def required_deliverables(self) -> List[str]:
+        return self.expected_deliverables
+
+    @property
+    def step_type(self) -> str:
+        return self.requirement_type
 
 
-class ProblemType(Enum):
-    """Types of bio AI research problems supported"""
-    GENE_SIMILARITY = "gene_function_similarity"  # Problem 1
-    RNA_STABILITY = "rna_stability_mechanism"     # Problem 2
-    PROTEIN_BINDER = "protein_binder_design"       # Problem 3
-    TARGET_DISCOVERY = "therapeutic_target_discovery"  # Problem 4
-    DRUG_REPOSITIONING = "drug_repositioning"     # Problem 5
+# Backward compatibility alias
+ResearchStep = Requirement
 
 
 @dataclass
-class Hypothesis:
-    """Represents a scientific hypothesis or research proposal"""
-    id: str
-    content: str
-    category: str
-    summary: str
-    generated_at: datetime
-    status: HypothesisStatus = HypothesisStatus.GENERATED
-    
-    # Evaluation scores
-    elo_rating: float = 1200.0
-    correctness_score: float = 0.0
-    quality_score: float = 0.0
-    novelty_score: float = 0.0
-    testability_score: float = 0.0
-    
-    # Reviews and feedback
-    initial_review: Optional[Dict] = None
-    full_review: Optional[Dict] = None
-    deep_verification: Optional[Dict] = None
-    observation_review: Optional[Dict] = None
-    simulation_review: Optional[Dict] = None
-    
-    # Tournament history
-    tournament_matches: List[Dict] = field(default_factory=list)
-    wins: int = 0
-    losses: int = 0
-    
-    # Evolution tracking
-    parent_ids: List[str] = field(default_factory=list)
-    evolution_method: Optional[str] = None
-    iteration: int = 1
-    
-    # Literature references
-    supporting_papers: List[str] = field(default_factory=list)
-    
+class RequirementAnswer:
+    """
+    Represents an answer to a specific requirement.
+
+    RequirementAnswer is the top-level evaluation unit in Sequential Confirmation:
+    - Multiple answers can be generated for each requirement
+    - Each answer is independently evaluated, ranked, and evolved
+    - Status progresses: generated → reviewed → ranked → confirmed
+
+    Key feature: answers can reference previous answers via 'builds_on' field,
+    enabling cumulative, coherent answer generation.
+    """
+    # Core identification
+    id: str = ""                           # Unique answer ID
+    requirement_id: str = ""               # Matching Requirement.requirement_id
+    requirement_title: str = ""            # Copy of requirement title for convenience
+
+    # Answer content
+    answer: str = ""                       # The actual answer content
+    rationale: str = ""                    # Why this answer was chosen
+    deliverables: Dict[str, Any] = field(default_factory=dict)  # Produced outputs
+    confidence: float = 0.5                # 0.0 to 1.0
+    evidence: List[str] = field(default_factory=list)  # Supporting evidence/references
+    builds_on: List[str] = field(default_factory=list)  # IDs of previous answers this builds upon
+
+    # Ranking Support (ELO Tournament)
+    elo_rating: float = 1200.0             # ELO rating for ranking
+    wins: int = 0                          # Tournament wins
+    losses: int = 0                        # Tournament losses
+
+    # Status Management (Sequential Confirmation)
+    status: str = "generated"
+    # Status flow: generated → reviewed → ranked → confirmed
+
+    # Review Results (from ReflectionAgent)
+    review: Optional[Dict[str, Any]] = None  # Full review
+    quality_score: float = 0.0             # Overall quality score (0.0 to 1.0)
+    novelty_score: float = 0.0             # Novelty score (0.0 to 1.0)
+
+    # Evolution Tracking
+    parent_ids: List[str] = field(default_factory=list)  # IDs of parent answers
+    evolution_method: Optional[str] = None  # grounding, coherence, simplification, divergent
+    iteration: int = 1                     # Evolution iteration number
+
     # Metadata
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    generated_at: Optional[datetime] = None
+    generation_method: str = "data_based"  # data_based, assumption, expansion, evolution
+    data_sources: List[str] = field(default_factory=list)  # Which MCP tools/data sources were used
+    metadata: Dict[str, Any] = field(default_factory=dict)  # Additional metadata
+
+    def __post_init__(self):
+        """Generate ID if not provided"""
+        if not self.id and self.requirement_id:
+            timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
+            self.id = f"ans_{self.requirement_id}_{timestamp}"
+        if self.generated_at is None:
+            self.generated_at = datetime.now()
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            # Core
+            "id": self.id,
+            "requirement_id": self.requirement_id,
+            "requirement_title": self.requirement_title,
+            # Content
+            "answer": self.answer,
+            "rationale": self.rationale,
+            "deliverables": self.deliverables,
+            "confidence": self.confidence,
+            "evidence": self.evidence,
+            "builds_on": self.builds_on,
+            # Ranking
+            "elo_rating": self.elo_rating,
+            "wins": self.wins,
+            "losses": self.losses,
+            # Status
+            "status": self.status,
+            "review": self.review,
+            "quality_score": self.quality_score,
+            "novelty_score": self.novelty_score,
+            # Evolution
+            "parent_ids": self.parent_ids,
+            "evolution_method": self.evolution_method,
+            "iteration": self.iteration,
+            # Metadata
+            "generated_at": self.generated_at.isoformat() if self.generated_at else None,
+            "generation_method": self.generation_method,
+            "data_sources": self.data_sources,
+            "metadata": self.metadata,
+            # Backward compatibility fields
+            "step_id": self.requirement_id,
+            "step_title": self.requirement_title
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "RequirementAnswer":
+        # Parse generated_at
+        generated_at = data.get("generated_at")
+        if isinstance(generated_at, str):
+            try:
+                generated_at = datetime.fromisoformat(generated_at)
+            except ValueError:
+                generated_at = datetime.now()
+        elif generated_at is None:
+            generated_at = datetime.now()
+
+        return cls(
+            # Core
+            id=data.get("id", ""),
+            requirement_id=data.get("requirement_id", data.get("step_id", "")),
+            requirement_title=data.get("requirement_title", data.get("step_title", "")),
+            # Content
+            answer=data.get("answer", ""),
+            rationale=data.get("rationale", ""),
+            deliverables=data.get("deliverables", {}),
+            confidence=data.get("confidence", 0.5),
+            evidence=data.get("evidence", []),
+            builds_on=data.get("builds_on", []),
+            # Ranking
+            elo_rating=data.get("elo_rating", 1200.0),
+            wins=data.get("wins", 0),
+            losses=data.get("losses", 0),
+            # Status
+            status=data.get("status", "generated"),
+            review=data.get("review"),
+            quality_score=data.get("quality_score", 0.0),
+            novelty_score=data.get("novelty_score", 0.0),
+            # Evolution
+            parent_ids=data.get("parent_ids", []),
+            evolution_method=data.get("evolution_method"),
+            iteration=data.get("iteration", 1),
+            # Metadata
+            generated_at=generated_at,
+            generation_method=data.get("generation_method", "data_based"),
+            data_sources=data.get("data_sources", []),
+            metadata=data.get("metadata", {})
+        )
+
+    # Backward compatibility properties
+    @property
+    def step_id(self) -> str:
+        return self.requirement_id
+
+    @property
+    def step_title(self) -> str:
+        return self.requirement_title
+
+    # Status Helpers
+    def is_confirmed(self) -> bool:
+        """Check if this answer is confirmed"""
+        return self.status == "confirmed"
+
+    def confirm(self) -> None:
+        """Mark this answer as confirmed"""
+        self.status = "confirmed"
+
+    def mark_confirmed(self) -> None:
+        """Mark this answer as confirmed (alias for confirm())"""
+        self.status = "confirmed"
+
+    def mark_reviewed(self) -> None:
+        """Mark this answer as reviewed"""
+        self.status = "reviewed"
+
+    def mark_ranked(self) -> None:
+        """Mark this answer as ranked"""
+        self.status = "ranked"
+
+
+# Backward compatibility alias
+StepAnswer = RequirementAnswer
 
 
 @dataclass
-class Review:
-    """Represents a review of a hypothesis"""
-    review_id: str
-    hypothesis_id: str
-    review_type: str  # initial, full, deep_verification, observation, simulation, tournament
-    reviewer: str
-    timestamp: datetime
-    
-    # Review content
-    correctness_assessment: Dict[str, Any]
-    quality_assessment: Dict[str, Any]
-    novelty_assessment: Dict[str, Any]
-    
-    # Detailed feedback
-    strengths: List[str]
-    weaknesses: List[str]
-    suggestions: List[str]
-    
-    # Decision
-    pass_review: bool
-    confidence: float
-    
-    # Supporting evidence
-    literature_references: List[str] = field(default_factory=list)
-    reasoning_chain: List[str] = field(default_factory=list)
+class ParsedProblem:
+    """
+    Represents a problem file parsed into structured components.
+
+    A problem contains REQUIREMENTS that must be answered.
+    Each (1), (2), etc. in the problem becomes a Requirement.
+
+    Supports multiple formats:
+    - Flat parenthesized: (1), (2), ...
+    - Flat dot-number: 1., 2., ...
+    - Hierarchical: (A) + sub-steps 1., 2.
+    """
+    title: str                                  # Problem title
+    background: str                             # Background/hypothesis section
+    input_data_description: Optional[str] = None
+    requirements: List[Requirement] = field(default_factory=list)
+    problem_type: str = "flat"                  # "flat" or "hierarchical"
+    major_sections: Dict[str, str] = field(default_factory=dict)
+    format_detected: str = "flat_paren_num"
+
+    @property
+    def research_steps(self) -> List[Requirement]:
+        """Backward compatibility: returns requirements as research_steps"""
+        return self.requirements
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "title": self.title,
+            "background": self.background,
+            "input_data_description": self.input_data_description,
+            "requirements": [req.to_dict() for req in self.requirements],
+            "research_steps": [req.to_dict() for req in self.requirements],
+            "problem_type": self.problem_type,
+            "major_sections": self.major_sections,
+            "format_detected": self.format_detected
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ParsedProblem":
+        req_data = data.get("requirements", data.get("research_steps", []))
+        reqs = [Requirement.from_dict(r) for r in req_data]
+        return cls(
+            title=data.get("title", ""),
+            background=data.get("background", ""),
+            input_data_description=data.get("input_data_description"),
+            requirements=reqs,
+            problem_type=data.get("problem_type", "flat"),
+            major_sections=data.get("major_sections", {}),
+            format_detected=data.get("format_detected", "flat_paren_num")
+        )
+
+    def get_requirement_by_id(self, requirement_id: str) -> Optional[Requirement]:
+        """Get a requirement by its ID."""
+        for req in self.requirements:
+            if req.requirement_id == requirement_id:
+                return req
+        return None
+
+    def get_step_by_id(self, step_id: str) -> Optional[Requirement]:
+        """Backward compatibility: Get a requirement by its ID."""
+        return self.get_requirement_by_id(step_id)
+
+    def get_requirements_by_parent(self, parent_id: Optional[str] = None) -> List[Requirement]:
+        """Get all requirements with a specific parent (None for top-level)."""
+        return [r for r in self.requirements if r.parent_id == parent_id]
+
+    def get_steps_by_parent(self, parent_id: Optional[str] = None) -> List[Requirement]:
+        """Backward compatibility: Get all requirements with a specific parent."""
+        return self.get_requirements_by_parent(parent_id)
+
+    def get_execution_order(self) -> List[List[str]]:
+        """
+        Returns requirements grouped by execution order (parallelizable groups).
+        Uses topological sort based on depends_on.
+        """
+        executed = set()
+        result = []
+        remaining = {r.requirement_id: r for r in self.requirements}
+
+        while remaining:
+            ready = []
+            for req_id, req in remaining.items():
+                if all(dep in executed for dep in req.depends_on):
+                    ready.append(req_id)
+
+            if not ready:
+                ready = list(remaining.keys())
+
+            result.append(ready)
+            for req_id in ready:
+                executed.add(req_id)
+                del remaining[req_id]
+
+        return result
 
 
 @dataclass
 class ResearchGoal:
     """Represents the overarching research goal"""
-    goal_id: str
-    description: str
-    domain: str
-    focus_areas: List[str]
-    constraints: Dict[str, Any]
-    success_criteria: List[str]
-    created_at: datetime
-    problem_type: Optional[ProblemType] = None  # Specific problem type
+    description: str = ""
+    problem_type: Optional[str] = None
+    domain: str = "biology"
+    goal_id: str = ""
+    focus_areas: List[str] = field(default_factory=list)
+    constraints: Dict[str, Any] = field(default_factory=dict)
+    success_criteria: List[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=datetime.now)
 
-
-@dataclass
-class TournamentMatch:
-    """Represents a tournament match between two hypotheses"""
-    match_id: str
-    hypothesis_a_id: str
-    hypothesis_b_id: str
-    timestamp: datetime
-    winner_id: str
-    decision_rationale: str
-    
-    # Debate rounds
-    debate_rounds: List[Dict] = field(default_factory=list)
-    
-    # Result
-    elo_changes: Dict[str, float] = field(default_factory=dict)
+    def __post_init__(self):
+        if not self.goal_id:
+            self.goal_id = f"goal-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
 
 
 @dataclass
 class Paper:
-    """Represents a scientific paper"""
+    """Represents a scientific paper reference"""
     title: str
     abstract: str
     authors: List[str]

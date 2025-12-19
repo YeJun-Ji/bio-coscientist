@@ -1,0 +1,163 @@
+You are a computational biology expert generating diverse answers for a specific research requirement.
+Your task is to provide {{ num_answers|default(3) }} DISTINCT answers that approach the requirement from different perspectives.
+
+**IMPORTANT: ALL responses MUST be written in ENGLISH only. Do not use any other language.**
+
+=== RESEARCH CONTEXT ===
+
+**Problem Title**: {{ parsed_problem.title|default("Research Problem") }}
+
+**Background**:
+{{ parsed_problem.background|default("")|truncate(1500) }}
+
+**Research Goal**:
+{{ research_goal.description|default("")|truncate(500) }}
+
+=== REQUIREMENT TO ANSWER ===
+
+**Requirement {{ requirement.requirement_id }}: {{ requirement.title }}**
+
+**Description**: {{ requirement.description }}
+
+**Requirement Type**: {{ requirement.requirement_type|default("answer") }}
+
+{% if requirement.expected_deliverables %}
+**Expected Deliverables** (you MUST provide all of these):
+{% for deliverable in requirement.expected_deliverables %}
+- {{ deliverable }}
+{% endfor %}
+{% endif %}
+
+{% if requirement.depends_on %}
+**Dependencies**: This requirement depends on: {{ requirement.depends_on|join(", ") }}
+{% endif %}
+
+{% if context %}
+=== CONFIRMED CONTEXT FROM DEPENDENCIES ===
+
+The following answers have been CONFIRMED and are immutable. Your answers MUST be consistent with these.
+
+{% for dep_id, dep_answer in context.items() %}
+---
+**Requirement {{ dep_id }}: {{ dep_answer.requirement_title|default("") }}**
+**Confirmed Answer**: {{ dep_answer.answer|truncate(400) }}
+**Key Deliverables**: {{ dep_answer.deliverables|default({})|tojson if dep_answer.deliverables else "N/A" }}
+---
+{% endfor %}
+{% endif %}
+
+{% if data_sources %}
+=== AVAILABLE DATA ===
+
+{% for source_name, source_data in data_sources.items() %}
+**{{ source_name }}**:
+{{ source_data|tojson(indent=2)|truncate(1000) }}
+
+{% endfor %}
+{% endif %}
+
+{% if analysis_results %}
+=== ANALYSIS RESULTS ===
+
+{% for tool_name, result in analysis_results.items() %}
+**{{ tool_name }}**:
+{{ result|tojson(indent=2)|truncate(800) }}
+
+{% endfor %}
+{% endif %}
+
+{% if constraints %}
+=== CONSTRAINTS ===
+
+All answers MUST satisfy:
+{% for constraint in constraints %}
+- {{ constraint }}
+{% endfor %}
+{% endif %}
+
+=== YOUR TASK ===
+
+Generate {{ num_answers|default(3) }} DIVERSE answers for Requirement {{ requirement.requirement_id }}.
+
+**DIVERSITY STRATEGY:**
+Each answer should take a different approach:
+
+1. **Conservative** (innovation_level: "low")
+   - Safe, well-established methodology
+   - Relies on proven techniques
+   - Lower risk, higher certainty
+
+2. **Moderate** (innovation_level: "moderate")
+   - Balanced approach
+   - Combines established methods with some innovation
+   - Medium risk, good feasibility
+
+3. **Aggressive** (innovation_level: "high")
+   - Novel, innovative approach
+   - Pushes boundaries
+   - Higher risk, potentially higher reward
+
+**CRITICAL RULES:**
+1. All answers MUST provide ALL expected deliverables
+2. All answers MUST be consistent with confirmed context
+3. Answers MUST be MEANINGFULLY different (not just rephrased)
+4. Include specific values, names, methods - be concrete
+5. Each answer should have its own scientific rationale
+
+=== OUTPUT FORMAT ===
+
+Respond with valid JSON only:
+
+```json
+{
+  "requirement_id": "{{ requirement.requirement_id }}",
+  "answers": [
+    {
+      "approach": "conservative",
+      "innovation_level": "low",
+      "strategy": "Brief description of approach strategy",
+      "answer": "Detailed answer (4-8 sentences). Be SPECIFIC with names, values, methods.",
+      "rationale": "Scientific reasoning supporting this approach (3-4 sentences)",
+      "deliverables": {
+        {% for deliverable in requirement.expected_deliverables|default([]) %}
+        "{{ deliverable|lower|replace(' ', '_')|replace('-', '_') }}": "Specific output for: {{ deliverable }}"{% if not loop.last %},{% endif %}
+        {% endfor %}
+      },
+      "confidence": 0.85,
+      "evidence": ["Reference 1", "Reference 2"]
+    },
+    {
+      "approach": "moderate",
+      "innovation_level": "moderate",
+      "strategy": "Brief description of balanced approach",
+      "answer": "Different detailed answer...",
+      "rationale": "Different scientific reasoning...",
+      "deliverables": { ... },
+      "confidence": 0.75,
+      "evidence": ["Reference 1"]
+    },
+    {
+      "approach": "aggressive",
+      "innovation_level": "high",
+      "strategy": "Brief description of innovative approach",
+      "answer": "Novel detailed answer...",
+      "rationale": "Novel scientific reasoning...",
+      "deliverables": { ... },
+      "confidence": 0.65,
+      "evidence": ["Reference 1"]
+    }
+  ]
+}
+```
+
+=== QUALITY CHECKLIST ===
+
+Before finalizing, verify:
+- [ ] All {{ num_answers|default(3) }} answers are genuinely different approaches
+- [ ] Each answer provides ALL expected deliverables
+- [ ] Answers are consistent with confirmed context
+- [ ] Specific values/methods are included (not vague)
+- [ ] Confidence levels reflect approach risk
+- [ ] Evidence cites real sources where possible
+
+Generate {{ num_answers|default(3) }} diverse answers now.

@@ -1,5 +1,8 @@
 """
-Ranking Agent
+Ranking Agent - RequirementAnswer Tournament System
+
+This agent ranks RequirementAnswers using ELO-based tournament
+for the Sequential Confirmation workflow.
 """
 
 import json
@@ -8,8 +11,8 @@ import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
-from ..core import Hypothesis, Review, ResearchGoal, HypothesisStatus, TournamentMatch
-from ..clients import LLMClient, WebSearchClient, EmbeddingClient
+from ..core import ResearchGoal, RequirementAnswer
+from ..external_apis import LLMClient
 from ..memory import ContextMemory
 from .base_agent import BaseAgent
 
@@ -18,221 +21,369 @@ logger = logging.getLogger(__name__)
 
 class RankingAgent(BaseAgent):
     """
-    Evaluates and ranks hypotheses using Elo-based tournament.
-    
+    Ranks RequirementAnswers using ELO-based tournament system.
+
     Features:
-    - Pairwise comparisons with scientific debates
-    - Multi-turn debates for top-ranked hypotheses
-    - Single-turn comparisons for lower-ranked hypotheses
-    - Optimized tournament matching based on proximity
+    - Pairwise comparisons for answers within same requirement
+    - ELO rating updates after each match
+    - Multi-turn debates for high-rated answers
     """
-    
-    def __init__(self, memory: ContextMemory, config: Dict[str, Any], llm_client: Optional[LLMClient] = None, web_search: Optional[WebSearchClient] = None):
-        super().__init__("RankingAgent", memory, config, llm_client, web_search)
-        self.k_factor = config.get("elo_k_factor", 32)
-    
+
+    def __init__(self, memory: ContextMemory, config: Dict[str, Any], llm_client: Optional[LLMClient] = None, **kwargs):
+        super().__init__(name="ranking", memory=memory, config=config, llm_client=llm_client, **kwargs)
+        # Read elo_k_factor from execution_plan (v3.0 config)
+        agent_cfg = config.get("execution_plan", {}).get("agent_config", {}).get("ranking", {})
+        self.k_factor = agent_cfg.get("elo_k_factor", 32)
+        # Track ELO changes during this run for memory synchronization
+        self._elo_changes: Dict[str, float] = {}
+        # Track wins/losses changes during this run for memory synchronization
+        self._win_loss_changes: Dict[str, Dict[str, int]] = {}
+
+    # ========== RequirementAnswer Helper Methods ==========
+
+    def _get_answer_id(self, answer) -> str:
+        """Get RequirementAnswer ID from dict or object"""
+        if isinstance(answer, dict):
+            return answer.get("id", "unknown")
+        return getattr(answer, "id", "unknown")
+
+    def _get_answer_content(self, answer) -> str:
+        """Get answer content from dict or RequirementAnswer object"""
+        if isinstance(answer, dict):
+            return answer.get("answer", "")
+        return getattr(answer, "answer", "")
+
+    def _get_answer_requirement_id(self, answer) -> str:
+        """Get requirement_id from dict or RequirementAnswer object"""
+        if isinstance(answer, dict):
+            return answer.get("requirement_id", "")
+        return getattr(answer, "requirement_id", "")
+
+    def _get_answer_elo(self, answer) -> float:
+        """Get answer ELO from dict or RequirementAnswer object"""
+        if isinstance(answer, dict):
+            return answer.get("elo_rating", 1200.0)
+        return getattr(answer, "elo_rating", 1200.0)
+
+    def _set_answer_elo(self, answer, value: float) -> None:
+        """Set answer ELO for both dict and RequirementAnswer object"""
+        if isinstance(answer, dict):
+            answer["elo_rating"] = value
+        else:
+            answer.elo_rating = value
+
+    def _get_answer_wins(self, answer) -> int:
+        """Get answer wins from dict or RequirementAnswer object"""
+        if isinstance(answer, dict):
+            return answer.get("wins", 0)
+        return getattr(answer, "wins", 0)
+
+    def _set_answer_wins(self, answer, value: int) -> None:
+        """Set answer wins for both dict and RequirementAnswer object"""
+        if isinstance(answer, dict):
+            answer["wins"] = value
+        else:
+            answer.wins = value
+
+    def _get_answer_losses(self, answer) -> int:
+        """Get answer losses from dict or RequirementAnswer object"""
+        if isinstance(answer, dict):
+            return answer.get("losses", 0)
+        return getattr(answer, "losses", 0)
+
+    def _set_answer_losses(self, answer, value: int) -> None:
+        """Set answer losses for both dict and RequirementAnswer object"""
+        if isinstance(answer, dict):
+            answer["losses"] = value
+        else:
+            answer.losses = value
+
+    def _get_answer_rationale(self, answer) -> str:
+        """Get rationale from dict or RequirementAnswer object"""
+        if isinstance(answer, dict):
+            return answer.get("rationale", "")
+        return getattr(answer, "rationale", "")
+
+    def _get_answer_deliverables(self, answer) -> Dict[str, Any]:
+        """Get deliverables from dict or RequirementAnswer object"""
+        if isinstance(answer, dict):
+            return answer.get("deliverables", {})
+        return getattr(answer, "deliverables", {})
+
+    # ========== Main Entry Point ==========
+
     async def run(self, task: Dict[str, Any]) -> Dict[str, Any]:
-        """Run tournament to rank hypotheses"""
-        hypotheses = task.get("hypotheses", [])
-        proximity_graph = task.get("proximity_graph", {})
-        
-        self.log(f"Running tournament with {len(hypotheses)} hypotheses")
-        
-        # Organize tournament matches
-        matches = self.organize_matches(hypotheses, proximity_graph)
-        
-        # Execute matches in parallel
-        results = []
-        
-        # 병렬로 모든 매치 실행
-        match_tasks = [
-            self.conduct_match(
-                match_config["hyp_a"],
-                match_config["hyp_b"],
-                match_config["debate_turns"]
-            )
-            for match_config in matches
-        ]
-        
-        results = await asyncio.gather(*match_tasks)
-        
-        # Update Elo ratings for all matches
-        for i, result in enumerate(results):
-            match_config = matches[i]
-            self.update_elo_ratings(
-                match_config["hyp_a"],
-                match_config["hyp_b"],
-                result["winner_id"]
-            )
-        
-        # Get updated rankings
-        rankings = self.get_rankings(hypotheses)
-        
-        return {
-            "status": "success",
-            "matches_conducted": len(results),
-            "rankings": rankings
-        }
-    
-    def organize_matches(
-        self,
-        hypotheses: List[Hypothesis],
-        proximity_graph: Dict
-    ) -> List[Dict]:
-        """Organize tournament matches with prioritization"""
-        self.log("Organizing tournament matches")
-        
+        """
+        Execute the agent's primary task (required by BaseAgent).
+        Delegates to run_for_answers for RequirementAnswer ranking.
+        """
+        return await self.run_for_answers(task)
+
+    async def run_for_answers(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Run tournament to rank RequirementAnswers for the SAME requirement.
+
+        This is the main entry point for Sequential Confirmation.
+        Only answers for the same requirement can be compared.
+
+        Args:
+            task: {
+                "requirement_id": str,
+                "answers": List[RequirementAnswer],
+                "requirement": Dict (optional, for context)
+            }
+
+        Returns:
+            {
+                "status": "success" | "error",
+                "requirement_id": str,
+                "matches_conducted": int,
+                "rankings": List[Dict],
+                "elo_updates": Dict[str, float]
+            }
+        """
+        import time
+        func_start = time.time()
+
+        requirement_id = task.get("requirement_id", "")
+        answers = task.get("answers", [])
+        requirement = task.get("requirement", {})
+
+        self.log(f"[ANSWER-RANKING] Running tournament for requirement {requirement_id}")
+        self.log(f"[ANSWER-RANKING] {len(answers)} answers to compare")
+
+        if len(answers) < 2:
+            self.log("[ANSWER-RANKING] Not enough answers for tournament")
+            return {
+                "status": "success",
+                "requirement_id": requirement_id,
+                "matches_conducted": 0,
+                "rankings": self._get_answer_rankings(answers),
+                "elo_updates": {}
+            }
+
+        # Clear changes from previous run
+        self._elo_changes = {}
+        self._win_loss_changes = {}
+
+        try:
+            # Organize matches
+            matches = self._organize_answer_matches(answers)
+            self.log(f"[ANSWER-RANKING] Organized {len(matches)} matches")
+
+            # Execute matches in parallel
+            match_tasks = [
+                self._conduct_answer_match(
+                    match_config["answer_a"],
+                    match_config["answer_b"],
+                    requirement,
+                    match_config["debate_turns"]
+                )
+                for match_config in matches
+            ]
+
+            results = await asyncio.gather(*match_tasks)
+
+            # Update ELO ratings
+            for i, result in enumerate(results):
+                match_config = matches[i]
+                self._update_answer_elo_ratings(
+                    match_config["answer_a"],
+                    match_config["answer_b"],
+                    result["winner_id"]
+                )
+
+            # Get updated rankings
+            rankings = self._get_answer_rankings(answers)
+
+            # Update status to "ranked" for all answers
+            for answer in answers:
+                if isinstance(answer, dict):
+                    answer["status"] = "ranked"
+                else:
+                    answer.mark_ranked()
+
+            func_duration = time.time() - func_start
+            self.log(f"[ANSWER-RANKING] ✓ Complete ({func_duration:.2f}s)")
+            self.log(f"[ANSWER-RANKING] {len(results)} matches, top answer: {rankings[0]['id'] if rankings else 'N/A'}")
+
+            return {
+                "status": "success",
+                "requirement_id": requirement_id,
+                "matches_conducted": len(results),
+                "rankings": rankings,
+                "elo_updates": dict(self._elo_changes),
+                "win_loss_updates": dict(self._win_loss_changes)
+            }
+
+        except Exception as e:
+            self.log(f"[ANSWER-RANKING] ✗ Error: {e}", "error")
+            import traceback
+            self.log(f"[ANSWER-RANKING] {traceback.format_exc()}", "debug")
+            return {
+                "status": "error",
+                "requirement_id": requirement_id,
+                "message": str(e)
+            }
+
+    def _organize_answer_matches(self, answers: List) -> List[Dict]:
+        """Organize tournament matches for answers"""
         matches = []
-        # Priority 1: Compare similar hypotheses
-        # Priority 2: Compare new hypotheses
-        # Priority 3: Compare top-ranked hypotheses
-        
-        # TODO: Implement sophisticated match organization
-        # For now, simple pairwise matching
-        for i in range(0, len(hypotheses) - 1, 2):
-            is_top_tier = (hypotheses[i].elo_rating > 1400 and 
-                          hypotheses[i+1].elo_rating > 1400)
-            
+
+        # Sort by ELO for better matchups
+        sorted_answers = sorted(
+            answers,
+            key=lambda a: self._get_answer_elo(a),
+            reverse=True
+        )
+
+        # Pairwise matching
+        for i in range(0, len(sorted_answers) - 1, 2):
+            elo_a = self._get_answer_elo(sorted_answers[i])
+            elo_b = self._get_answer_elo(sorted_answers[i + 1])
+            is_top_tier = (elo_a > 1400 and elo_b > 1400)
+
             matches.append({
-                "hyp_a": hypotheses[i],
-                "hyp_b": hypotheses[i + 1],
-                "debate_turns": 3 if is_top_tier else 1
+                "answer_a": sorted_answers[i],
+                "answer_b": sorted_answers[i + 1],
+                "debate_turns": 2 if is_top_tier else 1  # Fewer turns for answers
             })
-        
+
         return matches
-    
-    async def conduct_match(
+
+    async def _conduct_answer_match(
         self,
-        hyp_a: Hypothesis,
-        hyp_b: Hypothesis,
+        answer_a,
+        answer_b,
+        requirement: Dict[str, Any],
         debate_turns: int
     ) -> Dict[str, Any]:
-        """Conduct a tournament match between two hypotheses"""
-        self.log(f"Match: {hyp_a.id} vs {hyp_b.id} ({debate_turns} turns)")
-        
-        if not self.llm:
-            self.log("LLM not configured, using random winner", "warning")
-            winner_id = hyp_a.id if hyp_a.elo_rating >= hyp_b.elo_rating else hyp_b.id
-        else:
-            try:
-                # Conduct debate
-                debate_history = []
-                for round_num in range(1, debate_turns + 1):
-                    prompt = self.prompt_manager.get_prompt(
-                        "ranking_tournament_debate",
-                        research_goal="Research goal context",  # Would get from task
-                        hypothesis_a=f"{hyp_a.summary}\n\n{hyp_a.content}",
-                        hypothesis_b=f"{hyp_b.summary}\n\n{hyp_b.content}",
-                        round_num=round_num,
-                        total_rounds=debate_turns,
-                        previous_debate="\n".join([str(d) for d in debate_history])
-                    )
-                    
-                    debate_response = await self.llm.generate_json(
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=0.5,
-                        purpose="ranking tournament debate"
-                    )
-                    debate_history.append(debate_response)
-                
-                # Final decision
-                final_prompt = self.prompt_manager.get_prompt(
-                    "ranking_tournament_final",
-                    research_goal="Research goal context",
-                    hypothesis_a=hyp_a.content,
-                    hypothesis_b=hyp_b.content,
-                    elo_a=hyp_a.elo_rating,
-                    elo_b=hyp_b.elo_rating,
-                    debate_summary=json.dumps(debate_history, indent=2)
-                )
-                
-                final_response = await self.llm.generate_json(
-                    messages=[{"role": "user", "content": final_prompt}],
-                    temperature=0.2,
-                    purpose="ranking tournament decision"
-                )
-                
-                # Parse winner with fallback
-                winner_choice = final_response.get("winner", "").upper()
-                if winner_choice == "A":
-                    winner_id = hyp_a.id
-                elif winner_choice == "B":
-                    winner_id = hyp_b.id
-                else:
-                    # Fallback: use ELO rating
-                    self.log(f"Invalid winner choice: {winner_choice}, using ELO fallback", "warning")
-                    winner_id = hyp_a.id if hyp_a.elo_rating >= hyp_b.elo_rating else hyp_b.id
-                
-                decision_rationale = final_response.get("rationale", "No rationale provided")
-                
-            except Exception as e:
-                self.log(f"Error in tournament match: {e}", "error")
-                winner_id = hyp_a.id if hyp_a.elo_rating >= hyp_b.elo_rating else hyp_b.id
-                decision_rationale = f"Error in debate, defaulting to higher Elo: {e}"
-                debate_history = []
-        
-        match = TournamentMatch(
-            match_id=f"match_{datetime.now().timestamp()}",
-            hypothesis_a_id=hyp_a.id,
-            hypothesis_b_id=hyp_b.id,
-            timestamp=datetime.now(),
-            debate_rounds=debate_history if 'debate_history' in locals() else [],
-            winner_id=winner_id,
-            decision_rationale=decision_rationale if 'decision_rationale' in locals() else "Default decision"
-        )
-        
-        self.memory.store_tournament_match(match)
-        
-        return {
-            "match_id": match.match_id,
-            "winner_id": match.winner_id,
-            "rationale": match.decision_rationale
-        }
-    
-    def update_elo_ratings(
-        self,
-        hyp_a: Hypothesis,
-        hyp_b: Hypothesis,
-        winner_id: str
-    ) -> None:
-        """Update Elo ratings based on match result"""
-        # Calculate expected scores
-        expected_a = 1 / (1 + 10 ** ((hyp_b.elo_rating - hyp_a.elo_rating) / 400))
-        expected_b = 1 - expected_a
-        
-        # Actual scores
-        score_a = 1.0 if winner_id == hyp_a.id else 0.0
-        score_b = 1.0 - score_a
-        
-        # Update ratings
-        hyp_a.elo_rating += self.k_factor * (score_a - expected_a)
-        hyp_b.elo_rating += self.k_factor * (score_b - expected_b)
-        
-        # Update win/loss records
-        if winner_id == hyp_a.id:
-            hyp_a.wins += 1
-            hyp_b.losses += 1
-        else:
-            hyp_b.wins += 1
-            hyp_a.losses += 1
-        
-        self.log(f"Updated ratings: {hyp_a.id}={hyp_a.elo_rating:.1f}, "
-                f"{hyp_b.id}={hyp_b.elo_rating:.1f}")
-    
-    def get_rankings(self, hypotheses: List[Hypothesis]) -> List[Dict]:
-        """Get current rankings of all hypotheses"""
-        sorted_hyps = sorted(hypotheses, key=lambda h: h.elo_rating, reverse=True)
-        
-        rankings = []
-        for rank, hyp in enumerate(sorted_hyps, 1):
-            rankings.append({
-                "rank": rank,
-                "hypothesis_id": hyp.id,
-                "elo_rating": hyp.elo_rating,
-                "wins": hyp.wins,
-                "losses": hyp.losses,
-                "summary": hyp.summary
-            })
-        
-        return rankings
+        """Conduct a tournament match between two answers"""
+        answer_a_id = self._get_answer_id(answer_a)
+        answer_b_id = self._get_answer_id(answer_b)
 
+        self.log(f"  Match: {answer_a_id} vs {answer_b_id}")
+
+        if not self.llm:
+            # Fallback: use ELO
+            elo_a = self._get_answer_elo(answer_a)
+            elo_b = self._get_answer_elo(answer_b)
+            winner_id = answer_a_id if elo_a >= elo_b else answer_b_id
+            return {"winner_id": winner_id, "rationale": "ELO fallback"}
+
+        try:
+            # Build answer comparison prompt
+            prompt = self.prompt_manager.get_prompt(
+                "ranking/answer_comparison",
+                requirement=requirement,
+                answer_a={
+                    "id": answer_a_id,
+                    "answer": self._get_answer_content(answer_a),
+                    "rationale": self._get_answer_rationale(answer_a),
+                    "deliverables": self._get_answer_deliverables(answer_a),
+                    "elo_rating": self._get_answer_elo(answer_a)
+                },
+                answer_b={
+                    "id": answer_b_id,
+                    "answer": self._get_answer_content(answer_b),
+                    "rationale": self._get_answer_rationale(answer_b),
+                    "deliverables": self._get_answer_deliverables(answer_b),
+                    "elo_rating": self._get_answer_elo(answer_b)
+                }
+            )
+
+            response = await self.llm.generate_json(
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                purpose="answer_comparison"
+            )
+
+            winner_choice = response.get("winner", "").upper()
+            if winner_choice == "A":
+                winner_id = answer_a_id
+            elif winner_choice == "B":
+                winner_id = answer_b_id
+            else:
+                # Fallback
+                elo_a = self._get_answer_elo(answer_a)
+                elo_b = self._get_answer_elo(answer_b)
+                winner_id = answer_a_id if elo_a >= elo_b else answer_b_id
+
+            return {
+                "winner_id": winner_id,
+                "rationale": response.get("rationale", ""),
+                "comparison": response
+            }
+
+        except Exception as e:
+            self.log(f"  Error in match: {e}", "warning")
+            elo_a = self._get_answer_elo(answer_a)
+            elo_b = self._get_answer_elo(answer_b)
+            winner_id = answer_a_id if elo_a >= elo_b else answer_b_id
+            return {"winner_id": winner_id, "rationale": f"Error fallback: {e}"}
+
+    def _update_answer_elo_ratings(self, answer_a, answer_b, winner_id: str) -> None:
+        """Update ELO ratings for answers after a match"""
+        answer_a_id = self._get_answer_id(answer_a)
+        answer_b_id = self._get_answer_id(answer_b)
+
+        elo_a = self._get_answer_elo(answer_a)
+        elo_b = self._get_answer_elo(answer_b)
+
+        # Calculate expected scores
+        expected_a = 1 / (1 + 10 ** ((elo_b - elo_a) / 400))
+        expected_b = 1 - expected_a
+
+        # Actual scores
+        if winner_id == answer_a_id:
+            actual_a, actual_b = 1, 0
+        else:
+            actual_a, actual_b = 0, 1
+
+        # Update ELO
+        new_elo_a = elo_a + self.k_factor * (actual_a - expected_a)
+        new_elo_b = elo_b + self.k_factor * (actual_b - expected_b)
+
+        self._set_answer_elo(answer_a, new_elo_a)
+        self._set_answer_elo(answer_b, new_elo_b)
+
+        # Track changes
+        self._elo_changes[answer_a_id] = new_elo_a
+        self._elo_changes[answer_b_id] = new_elo_b
+
+        # Update wins/losses
+        wins_a = self._get_answer_wins(answer_a)
+        losses_a = self._get_answer_losses(answer_a)
+        wins_b = self._get_answer_wins(answer_b)
+        losses_b = self._get_answer_losses(answer_b)
+
+        if winner_id == answer_a_id:
+            self._set_answer_wins(answer_a, wins_a + 1)
+            self._set_answer_losses(answer_b, losses_b + 1)
+            self._win_loss_changes[answer_a_id] = {"wins": wins_a + 1, "losses": losses_a}
+            self._win_loss_changes[answer_b_id] = {"wins": wins_b, "losses": losses_b + 1}
+        else:
+            self._set_answer_wins(answer_b, wins_b + 1)
+            self._set_answer_losses(answer_a, losses_a + 1)
+            self._win_loss_changes[answer_a_id] = {"wins": wins_a, "losses": losses_a + 1}
+            self._win_loss_changes[answer_b_id] = {"wins": wins_b + 1, "losses": losses_b}
+
+    def _get_answer_rankings(self, answers: List) -> List[Dict]:
+        """Get current rankings for answers sorted by ELO"""
+        ranked = sorted(
+            answers,
+            key=lambda a: self._get_answer_elo(a),
+            reverse=True
+        )
+
+        return [
+            {
+                "rank": i + 1,
+                "id": self._get_answer_id(a),
+                "requirement_id": self._get_answer_requirement_id(a),
+                "elo_rating": self._get_answer_elo(a),
+                "wins": self._get_answer_wins(a),
+                "losses": self._get_answer_losses(a)
+            }
+            for i, a in enumerate(ranked)
+        ]

@@ -1,0 +1,223 @@
+You are a research problem parser. Your task is to analyze a research problem statement and extract its structured components.
+
+## Problem Text to Parse:
+{{ problem_text }}
+
+## Your Task:
+Parse this problem into THREE main components:
+
+### 1. Background (배경/가설)
+Extract all contextual information, background knowledge, hypotheses, and motivation.
+This includes:
+- Scientific background
+- Prior knowledge or assumptions
+- Research motivation
+- Hypotheses being tested
+
+### 2. Input Data (입력 데이터) - Optional
+If the problem mentions specific input data, files, databases, or datasets, extract them here.
+Look for patterns like:
+- "입력 데이터:", "Input:", "데이터:"
+- File references (*.csv, *.fasta, *.pdb, etc.)
+- Database references (KEGG, UniProt, PDB, etc.)
+- If no explicit input data is mentioned, set this to null.
+
+### 3. Requirements (문제의 요구사항)
+Extract what the problem ASKS FOR - what questions must the hypothesis answer?
+Think of each requirement as: "A good hypothesis must provide an answer to this question."
+
+These are typically numbered or lettered items like:
+- (1), (2), (3)... or 1., 2., 3....
+- (A), (B), (C)... with optional sub-requirements
+- Hierarchical structures with sections and sub-items
+
+**Important**: Frame each item as a REQUIREMENT (what the hypothesis must answer), not a procedural step.
+
+## Requirement Format Detection Rules:
+
+| Pattern | Regex | Format Type |
+|---------|-------|-------------|
+| `(1)`, `(2)` | `\((\d+)\)` | flat_paren_num |
+| `1.`, `2.` | `^(\d+)\.` | flat_dot_num |
+| `(A)`, `(B)` | `\(([A-Z])\)` | section_paren |
+| `(A)` with sub `1.` | Hierarchical | hierarchical |
+
+## Requirement Type Classification:
+Classify each requirement based on what kind of answer is expected:
+
+| Requirement Type | Keywords | What the hypothesis must provide |
+|------------------|----------|----------------------------------|
+| answer | 설명, 제시, 답, explain, provide, what | A direct answer or explanation |
+| design | 설계, 제안, 발굴, 예측, design, propose, predict | A design proposal or prediction |
+| analysis | 분석, 비교, 탐색, 정리, analyze, compare, explore | An analytical result |
+| validation | 검증, 확인, 평가, validate, verify, evaluate | Validation evidence or reasoning |
+| synthesis | 통합, 모델링, 네트워크, integrate, model | An integrated model or framework |
+
+## Priority Classification:
+Assign priority based on importance:
+- **1 (Required)**: Core requirements that MUST be answered
+- **2 (Recommended)**: Important but not critical requirements
+- **3 (Optional)**: Nice-to-have additional answers
+
+## Dependency Detection (CRITICAL for Sequential Confirmation):
+For each requirement, determine:
+1. `depends_on`: Which previous requirements must be answered first (their answers are needed as context)
+2. `can_parallelize`: Can this requirement be answered independently
+
+**This is CRITICAL**: Proper dependency detection enables correct execution order.
+
+### Dependency Pattern Recognition:
+
+| Pattern (Korean) | Pattern (English) | Interpretation |
+|-----------------|-------------------|----------------|
+| `(1,2,3)을 통합하여` | `integrating (1,2,3)` | depends_on: ["1", "2", "3"] |
+| `위 결과를 바탕으로` | `based on above results` | depends_on: all previous requirements |
+| `앞서 선정한 X를 사용하여` | `using the selected X from above` | depends_on: requirement that selects X |
+| `(1)에서 정의한` | `defined in (1)` | depends_on: ["1"] |
+| `이전 단계의 결과로` | `from previous step results` | depends_on: [previous requirement] |
+| `X와 Y를 결합하여` | `combining X and Y` | depends_on: [req for X, req for Y] |
+
+### Rules:
+1. **Explicit references**: `(1)`, `(2)` 등 명시적 참조 → 해당 ID 추가
+2. **Integration keywords**: 통합, 종합, 결합, integrate, synthesize → 참조된 모든 requirement 추가
+3. **Sequential implicit**: "위", "앞서", "이전" → 바로 이전 requirement에 의존
+4. **Independent requirements**: 다른 requirement 결과 없이 답변 가능 → depends_on: [], can_parallelize: true
+5. **Section independence**: 다른 섹션(A, B)의 requirement는 기본적으로 독립적
+6. **Be conservative**: 확실한 의존성만 표시, 불확실하면 독립으로 처리
+
+## Output Format:
+Respond with valid JSON only:
+
+```json
+{
+  "title": "Problem title (extract from first line or generate concise title)",
+  "background": "All background/context text combined into one coherent section",
+  "input_data_description": "Description of input data if mentioned, or null",
+  "problem_type": "flat" | "hierarchical",
+  "format_detected": "flat_paren_num" | "flat_dot_num" | "section_paren" | "hierarchical",
+  "major_sections": {
+    "A": "Section A title (if hierarchical)",
+    "B": "Section B title (if hierarchical)"
+  },
+  "requirements": [
+    {
+      "requirement_id": "1" | "A" | "A.1",
+      "title": "Short descriptive title (what must be answered)",
+      "description": "Full description of what the hypothesis must address",
+      "parent_id": null | "A",
+      "expected_deliverables": ["What answer should provide 1", "What answer should provide 2"],
+      "depends_on": [],
+      "can_parallelize": true,
+      "order": 0,
+      "priority": 1 | 2 | 3,
+      "requirement_type": "answer" | "design" | "analysis" | "validation" | "synthesis"
+    }
+  ]
+}
+```
+
+## Critical Instructions:
+1. Extract ALL requirements mentioned in the problem - do not skip any
+2. Preserve the original numbering/lettering system
+3. For hierarchical problems:
+   - Create parent entries for sections (A, B, C)
+   - Create child entries with parent_id reference (A.1, A.2, B.1)
+4. expected_deliverables should list what a good answer must provide
+5. Be conservative with dependencies - only mark as dependent if one answer clearly needs another
+6. The background section should be comprehensive - include all non-requirement content
+7. Frame each requirement as "what the hypothesis must answer" not "what to do"
+
+## Examples:
+
+### Example 1: Flat Parenthesized Format with Clear Dependencies
+Input:
+```
+삼중음성유방암 치료제 후보 설계
+Background: TNFα-ΔNp63α axis가 TNBC 진행에 핵심적...
+(1) Binder의 TNFR1/2 결합 부위 선정
+(2) Binder의 생물물리적 제약 조건 반영
+(3) 후보 binder 서열 설계
+```
+
+**Dependency Analysis:**
+- (1): 독립적 - 결합 부위 선정은 다른 결과 불필요
+- (2): (1)에 의존 - 결합 부위가 정해져야 제약 조건 정의 가능
+- (3): (2)에 의존 - 제약 조건을 알아야 서열 설계 가능
+
+**Execution Order:** [["1"], ["2"], ["3"]] (완전 순차)
+
+Output:
+```json
+{
+  "title": "삼중음성유방암 치료제 후보 설계",
+  "background": "TNFα-ΔNp63α axis가 TNBC 진행에 핵심적...",
+  "input_data_description": null,
+  "problem_type": "flat",
+  "format_detected": "flat_paren_num",
+  "major_sections": {},
+  "requirements": [
+    {"requirement_id": "1", "title": "TNFR1/2 결합 부위 선정", "description": "Binder가 결합할 TNFR1/2 부위를 선정하고 그 이유를 제시", "parent_id": null, "expected_deliverables": ["선정된 결합 부위", "선정 근거"], "depends_on": [], "can_parallelize": true, "order": 0, "priority": 1, "requirement_type": "design"},
+    {"requirement_id": "2", "title": "생물물리적 제약 조건 정의", "description": "Binder 설계에 반영해야 할 생물물리적 제약 조건을 제시", "parent_id": null, "expected_deliverables": ["제약 조건 목록", "각 조건의 이유"], "depends_on": ["1"], "can_parallelize": false, "order": 1, "priority": 1, "requirement_type": "design"},
+    {"requirement_id": "3", "title": "후보 binder 서열 제안", "description": "위 조건을 만족하는 후보 binder 서열을 설계하고 제안", "parent_id": null, "expected_deliverables": ["Binder 서열", "서열 설계 근거"], "depends_on": ["2"], "can_parallelize": false, "order": 2, "priority": 1, "requirement_type": "design"}
+  ]
+}
+```
+
+### Example 2: Parallel-capable Requirements with Integration
+Input:
+```
+T 세포 유전자 간 기능 유사성 정량화
+Background: 기능적으로 유사한 유전자쌍은 발현 패턴, 단백질 구조, 진화적 계통이 유사...
+(1) LLM 기반 유전자 기능 요약 생성
+(2) LLM 기반 phylogenic tree 생성
+(3) Expression 기반 유사성 점수 생성
+(4) (1,2,3)을 통합한 Similarity Score로 주요 유전자쌍 제시
+(5) 단백질 구조 유사도 점수 생성
+```
+
+**Dependency Analysis:**
+- (1): 독립적 - LLM으로 직접 생성 가능
+- (2): 독립적 - LLM으로 직접 생성 가능
+- (3): 독립적 - Expression 데이터로 직접 계산
+- (4): (1), (2), (3)에 의존 ← "(1,2,3)을 통합한" 명시적 참조!
+- (5): 독립적 - 단백질 정보로 직접 계산
+
+**Execution Order:** [["1", "2", "3", "5"], ["4"]]
+- Group 1: 1, 2, 3, 5 병렬 처리 가능!
+- Group 2: 4는 1,2,3 완료 후
+
+Output:
+```json
+{
+  "title": "T 세포 유전자 간 기능 유사성 정량화",
+  "requirements": [
+    {"requirement_id": "1", "title": "유전자 기능 요약 생성", "depends_on": [], "can_parallelize": true, "order": 0},
+    {"requirement_id": "2", "title": "Phylogenic tree 생성", "depends_on": [], "can_parallelize": true, "order": 1},
+    {"requirement_id": "3", "title": "Expression 유사성 점수", "depends_on": [], "can_parallelize": true, "order": 2},
+    {"requirement_id": "4", "title": "통합 Similarity Score로 유전자쌍 제시", "depends_on": ["1", "2", "3"], "can_parallelize": false, "order": 3},
+    {"requirement_id": "5", "title": "단백질 구조 유사도 점수", "depends_on": [], "can_parallelize": true, "order": 4}
+  ]
+}
+```
+
+### Example 3: Hierarchical Format
+Input:
+```
+폐 섬유증 치료 타겟 발굴
+Background...
+(A) IL-11 상호작용 인자 분석
+    1. IL-11의 역할 정리
+    2. 상호작용자 목록 통합
+(B) binder 제안
+    1. 타겟 클래스 정의
+```
+
+Output format_detected: "hierarchical" with parent_id references.
+- A.1, A.2 can parallelize within section A
+- B.1 depends on A (entire section)
+
+### Key Difference: Step vs Requirement
+- **Step (old)**: "TNFR1/2 결합 부위 선정" - What to DO
+- **Requirement (new)**: "Binder가 결합할 TNFR1/2 부위를 선정하고 그 이유를 제시" - What to ANSWER
+
+Now parse the given problem text and output the structured JSON.

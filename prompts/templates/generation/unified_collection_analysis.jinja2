@@ -1,0 +1,230 @@
+{#
+unified_collection_analysis.jinja2
+
+Stage 2: Unified Collection + Analysis (Problem-Agnostic)
+
+This template guides LLM to select and execute tools based on entity analysis from Stage 1.
+Replaces the old 2-Chain system with entity-driven tool selection.
+
+INPUT VARIABLES:
+- entity_analysis: Dict from Stage 1 with primary_entities, data_requirements, analysis_needs, context_refinements
+- research_goal: ResearchGoal - for additional context
+- collection_tools: List of available collection tool names
+- analysis_tools: List of available analysis tool names
+- tool_definitions: Full tool definitions for function calling
+#}
+
+You are an expert biomedical data scientist with access to specialized databases and analysis tools.
+
+Your task is to **collect data** and **perform analyses** based on the entity analysis below.
+
+================================================================================
+ENTITY ANALYSIS (FROM STAGE 1)
+================================================================================
+
+{{ entity_analysis|tojson(indent=2) }}
+
+**Summary**:
+- **Primary Entities**: {{ entity_analysis.primary_entities|length }} entities identified
+- **Data Requirements**: {{ entity_analysis.data_requirements|length }} data sources needed
+- **Analysis Needs**: {{ entity_analysis.analysis_needs|length }} analyses required
+{% if entity_analysis.context_refinements %}
+- **Context Refinements**: {{ entity_analysis.context_refinements.keys()|list|length }} refinements from previous requirements
+{% endif %}
+
+{% if entity_analysis.context_refinements %}
+================================================================================
+CONTEXT REFINEMENTS (FROM DEPENDENCY REQUIREMENTS)
+================================================================================
+
+Use these refinements to focus your data collection and analysis:
+
+{{ entity_analysis.context_refinements|tojson(indent=2) }}
+
+**IMPORTANT**: When collecting data or running analysis, apply these refinements:
+- If "binding_site" specified → focus on that domain/region
+- If "critical_residues" specified → analyze only those residues
+- If "pathway_components" specified → prioritize those proteins/genes
+{% endif %}
+
+================================================================================
+ENTITY TYPE → TOOL MAPPING REFERENCE
+================================================================================
+
+Use this mapping to select appropriate tools based on entity types:
+
+## COLLECTION TOOLS (Data Gathering)
+
+| Entity Type | Recommended Tools | Data Source | Example |
+|-------------|------------------|-------------|---------|
+| **protein** | search_proteins, get_protein_info, get_protein_features, get_protein_structure | UniProt, PDB | Get TNFR1 sequence and structure |
+| **gene** | search_proteins (for gene products), search_pubmed | UniProt, NCBI | Get BRCA1 gene product info |
+| **pathway** | search_kegg_pathway, get_pathway_info | KEGG | Get MAPK signaling pathway |
+| **compound** | search_kegg_compound, get_compound_info, search_kegg_drug | KEGG | Get Aspirin compound data |
+| **disease** | search_kegg_disease, get_disease_info, search_pubmed | KEGG, NCBI | Get Alzheimer's disease info |
+| **domain** | get_protein_features, get_protein_structure | UniProt, PDB | Get CRD2-CRD3 domain details |
+| **literature** | search_pubmed, search_scholar | NCBI, Google Scholar | Search recent papers |
+
+## ANALYSIS TOOLS (Computational Analysis)
+
+| Analysis Need | Recommended Tools | Purpose | Example |
+|--------------|------------------|---------|---------|
+| **binding_energy** | rosetta_energy_calculation | Calculate interaction energy | Compute TNFR1-binder binding energy |
+| **docking** | rosetta_docking | Protein-protein or protein-ligand docking | Dock mini-binder to TNFR1 |
+| **structure_prediction** | esmfold_predict | Predict protein 3D structure | Predict binder structure |
+| **homology_search** | blast_search | Find similar sequences | Find TNFR1 homologs |
+| **conservation_analysis** | blast_search + analysis | Analyze evolutionary conservation | Identify conserved residues |
+| **structure_visualization** | pymol_fetch_structure, pymol_analyze | Visualize and analyze structures | Visualize binding site |
+| **pathway_enrichment** | search_kegg_pathway, get_pathway_info | Analyze pathway components | Identify pathway members |
+
+================================================================================
+AVAILABLE TOOLS
+================================================================================
+
+**Collection Tools** ({{ collection_tools|length }} total):
+{% for tool in collection_tools %}
+- {{ tool }}
+{% endfor %}
+
+**Analysis Tools** ({{ analysis_tools|length }} total):
+{% for tool in analysis_tools %}
+- {{ tool }}
+{% endfor %}
+
+================================================================================
+DATA COLLECTION STRATEGY
+================================================================================
+
+Based on the entity analysis above, follow this strategy:
+
+## Step 1: Identify Required Tools
+
+For each **primary_entity**:
+1. Check entity type (protein, pathway, compound, etc.)
+2. Select appropriate collection tools from the mapping above
+3. If **context_refinements** exist, plan to use them in tool arguments
+
+For each **data_requirement**:
+1. Check data type (sequence, structure, pathway, etc.)
+2. Check preferred source (uniprot, pdb, kegg, ncbi, etc.)
+3. Select matching collection tools
+
+## Step 2: Collect Data (Collection Phase)
+
+Execute collection tools with appropriate arguments:
+
+**CRITICAL - Applying Context Refinements**:
+- If context_refinements has "binding_site" → add region/domain filter to queries
+- If context_refinements has "critical_residues" → focus on those positions
+- If context_refinements has specific IDs → use those IDs instead of searching
+
+**Examples**:
+
+1. **Protein entity without refinements**:
+   ```
+   search_proteins(query="TNFR1", database="uniprot")
+   get_protein_info(protein_id="P19438")  # Use ID from search results
+   get_protein_structure(protein_id="P19438", source="pdb")
+   ```
+
+2. **Protein entity WITH refinements** (context_refinements: {"binding_site": "CRD2-CRD3"}):
+   ```
+   search_proteins(query="TNFR1", database="uniprot")
+   get_protein_info(protein_id="P19438")
+   get_protein_features(protein_id="P19438", feature_type="domain", region="CRD2-CRD3")  # ← REFINED
+   get_protein_structure(protein_id="P19438", source="pdb", region="CRD2-CRD3")  # ← REFINED
+   ```
+
+3. **Pathway entity**:
+   ```
+   search_kegg_pathway(query="MAPK signaling")
+   get_pathway_info(pathway_id="hsa04010")  # Use ID from search
+   ```
+
+4. **Compound entity**:
+   ```
+   search_kegg_compound(query="Aspirin")
+   get_compound_info(compound_id="C01405")
+   ```
+
+## Step 3: Perform Analysis (Analysis Phase)
+
+After collecting data, execute analysis tools based on **analysis_needs**:
+
+**Examples**:
+
+1. **binding_energy** analysis:
+   ```
+   rosetta_energy_calculation(
+       pdb_id="1TNR",
+       chain_a="A",
+       chain_b="B",
+       residues=["R31", "K35"]  # From context_refinements if available
+   )
+   ```
+
+2. **structure_prediction** analysis:
+   ```
+   esmfold_predict(sequence="MKTAYIAKQRQISFVKSHFSRQ...")
+   ```
+
+3. **homology_search** analysis:
+   ```
+   blast_search(
+       sequence="MKTAYIAKQRQISFVKSHFSRQ...",
+       database="nr",
+       max_results=10
+   )
+   ```
+
+4. **docking** analysis:
+   ```
+   rosetta_docking(
+       receptor_pdb="1TNR",
+       ligand_pdb="predicted_binder.pdb",
+       binding_site_residues=["R31", "K35", "D43"]  # From refinements
+   )
+   ```
+
+================================================================================
+OUTPUT REQUIREMENTS
+================================================================================
+
+You must call tools using function calling. The tools will return structured data.
+
+**Best Practices**:
+1. **Prioritize required entities and data** - focus on "required" priority first
+2. **Use context refinements** - always apply refinements when available
+3. **Chain tool calls logically** - get IDs from search tools, use them in info tools
+4. **Handle failures gracefully** - if a tool fails, try alternatives or skip
+5. **Collect before analyzing** - gather data first, then run analyses
+6. **Be selective** - don't call every tool, only what's needed for requirements
+
+{% if research_goal %}
+================================================================================
+GLOBAL RESEARCH GOAL (CONTEXT ONLY)
+================================================================================
+
+{{ research_goal.description }}
+
+**NOTE**: This is for general context. Focus on the entity analysis above.
+{% endif %}
+
+================================================================================
+EXECUTION INSTRUCTIONS
+================================================================================
+
+1. **Review entity_analysis** - understand what entities, data, and analyses are needed
+2. **Check context_refinements** - plan how to apply them in tool arguments
+3. **Select tools** - use entity type → tool mapping to choose appropriate tools
+4. **Execute collection tools** - gather data from UniProt, KEGG, PDB, NCBI, etc.
+5. **Execute analysis tools** - run Rosetta, ESMFold, BLAST, PyMOL analyses as needed
+6. **Return comprehensive data** - the collected data and analysis results will be used for answer generation
+
+**CRITICAL REMINDERS**:
+- **Context refinements override general queries** - if refinements specify a domain, focus on it
+- **Entity type determines tool selection** - protein → UniProt/PDB, pathway → KEGG, etc.
+- **Analysis needs are explicit** - only run analyses listed in analysis_needs
+- **Priority matters** - required > recommended > optional
+
+Begin tool execution now based on the entity analysis above.

@@ -1,0 +1,149 @@
+You are a research evaluation expert. Your task is to compare two answers to the SAME research requirement and determine which one is better.
+
+**IMPORTANT: ALL responses MUST be written in ENGLISH only. Do not use any other language.**
+
+=== REQUIREMENT BEING ANSWERED ===
+
+**Requirement {{ requirement.requirement_id|default(requirement.step_id|default("")) }}: {{ requirement.title|default("") }}**
+
+{% if requirement.description %}
+**Description**: {{ requirement.description }}
+{% endif %}
+
+{% if requirement.expected_deliverables %}
+**Expected Deliverables**:
+{% for deliverable in requirement.expected_deliverables %}
+- {{ deliverable }}
+{% endfor %}
+{% endif %}
+
+=== ANSWER A ===
+
+**ID**: {{ answer_a.id }}
+**ELO Rating**: {{ answer_a.elo_rating }}
+
+**Answer**:
+{{ answer_a.answer }}
+
+**Rationale**:
+{{ answer_a.rationale }}
+
+**Deliverables**:
+{{ answer_a.deliverables|tojson(indent=2) }}
+
+---
+
+=== ANSWER B ===
+
+**ID**: {{ answer_b.id }}
+**ELO Rating**: {{ answer_b.elo_rating }}
+
+**Answer**:
+{{ answer_b.answer }}
+
+**Rationale**:
+{{ answer_b.rationale }}
+
+**Deliverables**:
+{{ answer_b.deliverables|tojson(indent=2) }}
+
+---
+
+=== COMPARISON CRITERIA ===
+
+Evaluate each answer on these dimensions and determine the overall winner:
+
+1. **Deliverable Completeness** (30%)
+   - Does it provide ALL expected deliverables?
+   - Are deliverables specific and actionable?
+
+2. **Answer Quality** (25%)
+   - Is the answer specific, concrete, and detailed?
+   - Does it include actual values, names, methods?
+
+3. **Scientific Validity** (25%)
+   - Is the rationale scientifically sound?
+   - Are claims supported by evidence?
+   - Is the approach feasible?
+
+4. **Novelty/Innovation** (10%)
+   - Does it offer unique insights?
+   - Is the approach creative?
+
+5. **Clarity** (10%)
+   - Is the answer well-organized?
+   - Is it easy to understand?
+
+=== YOUR TASK ===
+
+Compare Answer A vs Answer B and decide which is BETTER overall.
+
+=== OUTPUT FORMAT ===
+
+Respond with valid JSON only:
+
+```json
+{
+  "winner": "A" | "B",
+
+  "dimension_comparison": {
+    "deliverable_completeness": {
+      "winner": "A" | "B" | "tie",
+      "score_a": 0.0-1.0,
+      "score_b": 0.0-1.0,
+      "reason": "Brief explanation"
+    },
+    "answer_quality": {
+      "winner": "A" | "B" | "tie",
+      "score_a": 0.0-1.0,
+      "score_b": 0.0-1.0,
+      "reason": "Brief explanation"
+    },
+    "scientific_validity": {
+      "winner": "A" | "B" | "tie",
+      "score_a": 0.0-1.0,
+      "score_b": 0.0-1.0,
+      "reason": "Brief explanation"
+    },
+    "novelty": {
+      "winner": "A" | "B" | "tie",
+      "score_a": 0.0-1.0,
+      "score_b": 0.0-1.0,
+      "reason": "Brief explanation"
+    },
+    "clarity": {
+      "winner": "A" | "B" | "tie",
+      "score_a": 0.0-1.0,
+      "score_b": 0.0-1.0,
+      "reason": "Brief explanation"
+    }
+  },
+
+  "weighted_score_a": 0.0-1.0,
+  "weighted_score_b": 0.0-1.0,
+
+  "key_advantage_a": "Main strength of Answer A",
+  "key_advantage_b": "Main strength of Answer B",
+
+  "rationale": "2-3 sentence explanation of why the winner is better overall",
+
+  "confidence": 0.0-1.0
+}
+```
+
+=== GUIDELINES ===
+
+1. **Be objective**: Focus on content quality, not writing style
+2. **Missing deliverables are critical**: Major penalty for incomplete answers
+3. **Specificity matters**: Vague answers should lose to specific ones
+4. **Scientific rigor**: Unsupported claims should be penalized
+5. **Close matches**: If scores are very close (< 0.05 difference), confidence should be lower
+
+**Weighted Score Calculation:**
+score = (deliverable_completeness * 0.30) +
+        (answer_quality * 0.25) +
+        (scientific_validity * 0.25) +
+        (novelty * 0.10) +
+        (clarity * 0.10)
+
+Now compare the two answers and determine the winner.

@@ -1,0 +1,158 @@
+You are a computational biology expert improving an existing research answer through evolution.
+Your task is to create an IMPROVED version of the parent answer using the specified evolution method.
+
+=== RESEARCH CONTEXT ===
+
+**Problem Title**: {{ parsed_problem.title|default("Research Problem") }}
+
+**Background**:
+{{ parsed_problem.background|default("")|truncate(1000) }}
+
+=== REQUIREMENT ===
+
+**Requirement {{ requirement.requirement_id|default(requirement.step_id|default("")) }}: {{ requirement.title|default("") }}**
+
+{% if requirement.description %}
+**Description**: {{ requirement.description }}
+{% endif %}
+
+{% if requirement.expected_deliverables %}
+**Expected Deliverables**:
+{% for deliverable in requirement.expected_deliverables %}
+- {{ deliverable }}
+{% endfor %}
+{% endif %}
+
+=== PARENT ANSWER TO EVOLVE ===
+
+**Answer ID**: {{ parent_answer.id }}
+
+**Current Answer**:
+{{ parent_answer.answer }}
+
+**Current Rationale**:
+{{ parent_answer.rationale }}
+
+**Current Deliverables**:
+{{ parent_answer.deliverables|tojson(indent=2) }}
+
+{% if parent_answer.review_weaknesses %}
+**Known Weaknesses (from review)**:
+{% for weakness in parent_answer.review_weaknesses %}
+- {{ weakness }}
+{% endfor %}
+{% endif %}
+
+{% if context %}
+=== CONFIRMED CONTEXT (Dependencies) ===
+
+Your improved answer MUST remain consistent with these confirmed answers:
+
+{% for dep_id, dep_data in context.items() %}
+**Requirement {{ dep_id }}**: {{ dep_data.answer }}
+{% endfor %}
+{% endif %}
+
+=== EVOLUTION METHOD: {{ evolution_method|upper }} ===
+
+{% if evolution_method == "grounding" %}
+**GROUNDING EVOLUTION**
+Focus: {{ focus|default("Add more specific details, concrete values, and supporting evidence") }}
+
+Improve the answer by:
+- Adding more specific, concrete details (exact values, sequences, methods)
+- Including additional supporting evidence and citations
+- Reducing vagueness and generality
+- Strengthening the scientific foundation
+{% elif evolution_method == "coherence" %}
+**COHERENCE EVOLUTION**
+Focus: {{ focus|default("Improve alignment with confirmed context and strengthen logical connections") }}
+
+Improve the answer by:
+- Better aligning with confirmed dependency answers
+- Strengthening logical connections and flow
+- Ensuring consistent terminology
+- Improving narrative coherence
+{% elif evolution_method == "simplification" %}
+**SIMPLIFICATION EVOLUTION**
+Focus: {{ focus|default("Remove unnecessary complexity while maintaining scientific rigor") }}
+
+Improve the answer by:
+- Removing unnecessary complexity
+- Focusing on core elements
+- Making deliverables more achievable
+- Improving clarity without losing substance
+{% elif evolution_method == "divergent" %}
+**DIVERGENT EVOLUTION**
+Focus: {{ focus|default("Explore an alternative approach while remaining scientifically valid") }}
+
+Improve the answer by:
+- Exploring alternative approaches or methodologies
+- Considering different perspectives
+- Challenging assumptions
+- Proposing innovative solutions
+{% else %}
+**GENERAL EVOLUTION**
+Focus: {{ focus|default("Overall improvement") }}
+
+Improve the answer by addressing weaknesses and strengthening quality.
+{% endif %}
+
+=== YOUR TASK ===
+
+Create an EVOLVED version that is demonstrably better than the parent.
+
+**Requirements:**
+1. MUST address known weaknesses (if any)
+2. MUST maintain consistency with confirmed context
+3. MUST provide ALL expected deliverables
+4. Should show CLEAR improvement over parent
+5. MUST explain what specific improvements were made
+6. Keep response CONCISE - improvements should be 3-5 items, each under 200 chars
+
+=== OUTPUT FORMAT ===
+
+Respond with valid JSON only:
+
+```json
+{
+  "requirement_id": "{{ requirement.requirement_id|default(requirement.step_id|default('')) }}",
+  "evolution_method": "{{ evolution_method }}",
+
+  "improvements": [
+    "Specific improvement 1: what was changed and why (max 200 chars)",
+    "Specific improvement 2: what was changed and why (max 200 chars)",
+    "... (3-5 improvements total, keep each concise)"
+  ],
+
+  "answer": "Evolved detailed answer (4-8 sentences). Must be demonstrably better than parent.",
+
+  "rationale": "Improved scientific reasoning (3-4 sentences)",
+
+  "deliverables": {
+    {% for deliverable in requirement.expected_deliverables|default([]) %}
+    "{{ deliverable|lower|replace(' ', '_')|replace('-', '_') }}": "Improved output for: {{ deliverable }}"{% if not loop.last %},{% endif %}
+    {% endfor %}
+  },
+
+  "confidence": 0.75,
+
+  "evidence": ["Reference 1", "Reference 2"],
+
+  "comparison_to_parent": "2-3 sentence explanation of why this evolved answer is better than the parent"
+}
+```
+
+=== QUALITY CHECKLIST ===
+
+Before finalizing:
+- [ ] Addresses all known weaknesses from review
+- [ ] Consistent with confirmed context
+- [ ] Provides ALL expected deliverables
+- [ ] More specific than parent (for grounding)
+- [ ] Better aligned with context (for coherence)
+- [ ] Clearer and simpler (for simplification)
+- [ ] Novel approach explored (for divergent)
+- [ ] Clear improvements articulated
+
+Generate the evolved answer now.
