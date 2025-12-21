@@ -94,6 +94,19 @@ class ConfigurationAgent:
             constraints = await self._extract_constraints_simple(research_goal.description)
             self.logger.info(f"✓ Extracted {len(constraints)} hard constraints")
 
+            # Step 2.5: Detect and catalog input data files (NEW v3.1)
+            self.logger.info("📁 Detecting input data files...")
+            input_data_catalog = await self._detect_and_catalog_input_files(
+                research_goal.description,
+                parsed_problem,
+                research_goal
+            )
+            if input_data_catalog.get("has_input_files"):
+                num_files = len(input_data_catalog.get("files", []))
+                self.logger.info(f"✓ Found {num_files} input file(s) in {input_data_catalog.get('data_directory')}")
+            else:
+                self.logger.info("✓ No input data files (MCP-only mode)")
+
             # Step 3: Build execution plan (NEW v3.0)
             self.logger.info("📊 Building execution plan...")
             execution_order = parsed_problem.get_execution_order()
@@ -120,11 +133,12 @@ class ConfigurationAgent:
                 "original_research_goal": original_goal,
                 "parsed_problem": parsed_problem_dict,
                 "constraints": constraints,
+                "input_data_catalog": input_data_catalog,  # NEW v3.1
                 "execution_plan": execution_plan,
                 "metadata": {
                     "created_at": datetime.now().isoformat(),
                     "goal_id": research_goal.goal_id,
-                    "version": "3.0",
+                    "version": "3.1",
                     "config_format": "simplified"
                 }
             }
@@ -151,9 +165,9 @@ class ConfigurationAgent:
         Parse problem text to extract requirements that hypotheses must answer.
 
         Extracts:
-        1. Background (배경/가설)
-        2. Input Data (입력 데이터) - optional
-        3. Requirements (문제가 요구하는 것들) - each (1), (2), etc. becomes a requirement
+        1. Background - contextual information and hypotheses
+        2. Input Data - optional data files or databases
+        3. Requirements - each (1), (2), etc. becomes a requirement
 
         The key insight: Each numbered item in the problem is a REQUIREMENT
         that a good hypothesis must answer well.
@@ -366,27 +380,10 @@ class ConfigurationAgent:
         Returns:
             List of hard constraint strings
         """
-        prompt = f"""Extract HARD CONSTRAINTS from this research problem.
-Return only concrete, non-negotiable requirements.
-
-**IMPORTANT INSTRUCTIONS:**
-1. Extract ONLY hard constraints (must-have requirements)
-2. Each constraint should be specific and measurable
-3. Do NOT include soft preferences or nice-to-haves
-4. Return as simple list of strings
-
-Problem:
-{problem_text}
-
-Return valid JSON:
-{{
-  "hard_constraints": [
-    "constraint 1",
-    "constraint 2",
-    ...
-  ]
-}}
-"""
+        prompt = self.prompt_manager.get_prompt(
+            "configuration/extract_constraints",
+            problem_text=problem_text
+        )
 
         try:
             response = await self.llm.generate_json(
@@ -488,3 +485,157 @@ Return valid JSON:
         except Exception as e:
             self.logger.error(f"Failed to save configuration to {config_file}: {e}")
             raise
+
+    async def _detect_and_catalog_input_files(
+        self,
+        problem_text: str,
+        parsed_problem: 'ParsedProblem',
+        research_goal: 'ResearchGoal'
+    ) -> Dict[str, Any]:
+        """
+        Detect input data files and map them to requirements.
+
+        Steps:
+        1. Extract problem number from source file (e.g., "problem1.txt" → "1")
+        2. Check if data/problem<N>/ folder exists
+        3. Scan all files in folder (*.csv, *.bam, *.pod5, etc.)
+        4. Use LLM to map files to requirements based on semantics
+
+        Args:
+            problem_text: Research problem text
+            parsed_problem: Parsed problem object with requirements
+            research_goal: Research goal with metadata containing source_file
+
+        Returns:
+            {
+                "has_input_files": bool,
+                "data_directory": str or None,
+                "files": [
+                    {
+                        "file_name": "Q1.features.csv",
+                        "file_path": "/absolute/path/to/file",
+                        "file_size_kb": 3020,
+                        "file_type": "csv"
+                    }
+                ],
+                "requirement_mappings": {
+                    "1": ["Q1.features.csv"],
+                    "4": ["Q1.features.csv", "Q1.genelist.csv"]
+                }
+            }
+        """
+        import re
+        from pathlib import Path
+
+        try:
+            # Step 1: Extract problem number from source file
+            source_file = research_goal.metadata.get("source_file", "")
+            match = re.search(r'problem(\d+)', source_file)
+
+            if not match:
+                self.logger.info("No problem number found in source file, skipping data file detection")
+                return {"has_input_files": False}
+
+            problem_num = match.group(1)
+            data_dir = Path(f"data/problem{problem_num}")
+
+            # Step 2: Check if data directory exists
+            if not data_dir.exists() or not data_dir.is_dir():
+                self.logger.info(f"Data directory {data_dir} not found")
+                return {"has_input_files": False}
+
+            # Step 3: Scan all files in directory
+            files_info = []
+            for file_path in data_dir.iterdir():
+                if file_path.is_file() and not file_path.name.startswith('.'):
+                    file_size_kb = file_path.stat().st_size / 1024
+                    file_type = file_path.suffix[1:] if file_path.suffix else "unknown"
+
+                    files_info.append({
+                        "file_name": file_path.name,
+                        "file_path": str(file_path.absolute()),
+                        "file_size_kb": round(file_size_kb, 2),
+                        "file_type": file_type
+                    })
+
+            if not files_info:
+                self.logger.info(f"No files found in {data_dir}")
+                return {"has_input_files": False}
+
+            self.logger.info(f"Found {len(files_info)} files in {data_dir}")
+
+            # Step 4: Map files to requirements using LLM
+            requirement_mappings = await self._map_files_to_requirements(
+                files_info,
+                parsed_problem,
+                problem_text
+            )
+
+            return {
+                "has_input_files": True,
+                "data_directory": str(data_dir.absolute()),
+                "files": files_info,
+                "requirement_mappings": requirement_mappings
+            }
+
+        except Exception as e:
+            self.logger.error(f"Error detecting input files: {e}")
+            return {"has_input_files": False}
+
+    async def _map_files_to_requirements(
+        self,
+        files: List[Dict[str, Any]],
+        parsed_problem: 'ParsedProblem',
+        problem_text: str
+    ) -> Dict[str, List[str]]:
+        """
+        Use LLM to map files to requirements based on semantic analysis.
+
+        Args:
+            files: List of file info dicts
+            parsed_problem: Parsed problem object
+            problem_text: Research problem text
+
+        Returns:
+            {"1": ["Q1.features.csv"], "4": ["Q1.features.csv", "Q1.genelist.csv"]}
+        """
+        # Build prompt
+        files_desc = "\n".join([
+            f"- {f['file_name']} ({f['file_size_kb']} KB, {f['file_type']})"
+            for f in files
+        ])
+
+        requirements_desc = "\n".join([
+            f"- Requirement {req.requirement_id}: {req.title}\n  Description: {req.description[:200]}..."
+            for req in parsed_problem.requirements
+        ])
+
+        prompt = self.prompt_manager.get_prompt(
+            "configuration/map_files_to_requirements",
+            files_desc=files_desc,
+            requirements_desc=requirements_desc
+        )
+
+        try:
+            response = await self.llm.generate_json(
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+                purpose="map_files_to_requirements"
+            )
+
+            mappings = response.get("mappings", {})
+
+            # Log mappings
+            for req_id, file_names in mappings.items():
+                self.logger.info(f"Requirement {req_id} → {len(file_names)} file(s): {', '.join(file_names)}")
+
+            return mappings
+
+        except Exception as e:
+            self.logger.warning(f"Failed to map files to requirements: {e}, using conservative fallback")
+            # Fallback: map all files to all requirements
+            all_file_names = [f["file_name"] for f in files]
+            return {
+                req.requirement_id: all_file_names
+                for req in parsed_problem.requirements
+            }

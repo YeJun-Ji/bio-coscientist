@@ -1,0 +1,152 @@
+You are a computational biology expert. Generate ONE answer for this requirement using a {{ strategy }} approach.
+
+**IMPORTANT: ALL responses MUST be written in ENGLISH only. Do not use any other language.**
+
+=== RESEARCH CONTEXT ===
+
+**Problem Title**: {{ parsed_problem.title|default("Research Problem") }}
+
+**Background**:
+{{ parsed_problem.background|default("")|truncate(1500) }}
+
+**Research Goal**:
+{{ research_goal.description|default("")|truncate(500) }}
+
+=== REQUIREMENT TO ANSWER ===
+
+**Requirement {{ requirement.requirement_id }}: {{ requirement.title }}**
+
+**Description**: {{ requirement.description }}
+
+**Requirement Type**: {{ requirement.requirement_type|default("answer") }}
+
+{% if requirement.expected_deliverables %}
+**Expected Deliverables** (you MUST provide all of these):
+{% for deliverable in requirement.expected_deliverables %}
+- {{ deliverable }}
+{% endfor %}
+{% endif %}
+
+{% if requirement.depends_on %}
+**Dependencies**: This requirement depends on: {{ requirement.depends_on|join(", ") }}
+{% endif %}
+
+{% if context %}
+=== CONFIRMED CONTEXT FROM DEPENDENCIES ===
+
+The following answers have been CONFIRMED and are immutable. Your answer MUST be consistent with these.
+
+{% for dep_id, dep_answer in context.items() %}
+---
+**Requirement {{ dep_id }}: {{ dep_answer.requirement_title|default("") }}**
+**Confirmed Answer**: {{ dep_answer.answer|truncate(400) }}
+**Key Deliverables**: {{ dep_answer.deliverables|default({})|tojson if dep_answer.deliverables else "N/A" }}
+---
+{% endfor %}
+{% endif %}
+
+{% if data_sources %}
+=== AVAILABLE DATA ===
+
+{% for source_name, source_data in data_sources.items() %}
+**{{ source_name }}**:
+{{ source_data|tojson(indent=2)|truncate(1000) }}
+
+{% endfor %}
+{% endif %}
+
+{% if analysis_results %}
+=== ANALYSIS RESULTS ===
+
+{% for tool_name, result in analysis_results.items() %}
+**{{ tool_name }}**:
+{{ result|tojson(indent=2)|truncate(800) }}
+
+{% endfor %}
+{% endif %}
+
+{% if constraints %}
+=== CONSTRAINTS ===
+
+All answers MUST satisfy:
+{% for constraint in constraints %}
+- {{ constraint }}
+{% endfor %}
+{% endif %}
+
+=== YOUR TASK ===
+
+Generate ONE {{ strategy }} answer for Requirement {{ requirement.requirement_id }}.
+
+**STRATEGY: {{ strategy|upper }}**
+
+{% if strategy == "conservative" %}
+**Conservative Approach (Low Risk, High Certainty)**:
+- Stick to well-supported claims and established interpretations
+- Prefer proven techniques and methodologies
+- Minimize speculation; prioritize data-driven conclusions
+- Higher confidence in results (typically 0.8-0.9)
+- Focus on reproducibility and reliability
+
+{% elif strategy == "moderate" %}
+**Moderate Approach (Balanced Innovation & Feasibility)**:
+- Balance innovation with data support
+- Combine established methods with reasonable extensions
+- Include some novel connections if well-justified
+- Medium confidence in results (typically 0.6-0.8)
+- Balance risk and opportunity
+
+{% elif strategy == "aggressive" %}
+**Aggressive Approach (Novel Exploration, Higher Risk)**:
+- Push boundaries of interpretation
+- Explore novel connections and hypotheses
+- Propose innovative approaches even if speculative
+- Lower confidence but higher potential impact (typically 0.5-0.7)
+- Prioritize discovery over certainty
+
+{% else %}
+**General Approach**:
+Generate a comprehensive answer using the collected data and analysis results.
+{% endif %}
+
+**CRITICAL RULES:**
+1. You MUST provide ALL expected deliverables
+2. Your answer MUST be consistent with confirmed context
+3. Include specific values, names, methods - be concrete
+4. Provide clear scientific rationale for your approach
+5. Reference the data sources and analysis results you used
+
+=== OUTPUT FORMAT ===
+
+Respond with valid JSON only:
+
+```json
+{
+  "requirement_id": "{{ requirement.requirement_id }}",
+  "approach": "{{ strategy }}",
+  "innovation_level": "{% if strategy == 'conservative' %}low{% elif strategy == 'moderate' %}moderate{% else %}high{% endif %}",
+  "strategy": "Brief description of your {{ strategy }} approach strategy (1-2 sentences)",
+  "answer": "Detailed answer (4-8 sentences). Be SPECIFIC with names, values, methods from the data/analysis.",
+  "rationale": "Scientific reasoning supporting this {{ strategy }} approach (3-4 sentences). Explain why this strategy fits the requirement and data.",
+  "deliverables": {
+    {% for deliverable in requirement.expected_deliverables|default([]) %}
+    "{{ deliverable|lower|replace(' ', '_')|replace('-', '_') }}": "Specific output for: {{ deliverable }}"{% if not loop.last %},{% endif %}
+    {% endfor %}
+  },
+  "confidence": {% if strategy == "conservative" %}0.85{% elif strategy == "moderate" %}0.75{% else %}0.65{% endif %},
+  "data_references": [
+    "List the data sources and tools you relied on (e.g., specific databases, analysis methods, computational tools)"
+  ]
+}
+```
+
+=== QUALITY CHECKLIST ===
+
+Before finalizing, verify:
+- [ ] Your answer provides ALL expected deliverables
+- [ ] Answer is consistent with confirmed context
+- [ ] Specific values/methods from data/analysis are included (not vague)
+- [ ] Confidence level reflects {{ strategy }} strategy risk
+- [ ] Data references are clearly listed
+
+Generate your {{ strategy }} answer now.

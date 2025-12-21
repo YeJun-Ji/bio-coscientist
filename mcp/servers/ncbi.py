@@ -96,13 +96,18 @@ class NCBIServer:
                 "Please run NCBIServer.install() first."
             )
 
-        # Use venv Python directly (package installed via pip install -e .)
+        # Use venv Python directly (package installed via uv pip install -e .)
         if os.path.exists(venv_python):
             return [venv_python, "-m", "ncbi_mcp_server.server"]
 
-        # Fallback to uv run if venv not set up
+        # Fallback to uv run (will auto-install dependencies)
         uv_path = os.path.expanduser("~/.local/bin/uv")
-        return [uv_path, "run", "--python", "3.10", "--directory", install_path, "python", "-m", "ncbi_mcp_server.server"]
+        return [
+            uv_path, "run",
+            "--python", "3.10",
+            "--directory", install_path,
+            "python", "-m", "ncbi_mcp_server.server"
+        ]
     
     @staticmethod
     def get_config() -> Dict[str, Any]:

@@ -1,0 +1,578 @@
+{
+  "version": "1.0",
+  "description": "Domain-agnostic tool threshold configuration for BioCoScientist evaluation system",
+  "default_confidence_levels": ["high", "medium", "low"],
+
+  "tools": {
+    "blast": {
+      "metrics": {
+        "e_value": {
+          "type": "float",
+          "range": [0, 10],
+          "interpretation": {
+            "high": {
+              "operator": "<=",
+              "value": 1e-5,
+              "description": "High confidence homology"
+            },
+            "medium": {
+              "operator": "<=",
+              "value": 0.001,
+              "description": "Medium confidence homology"
+            },
+            "low": {
+              "operator": ">",
+              "value": 0.001,
+              "description": "Low confidence or no significant similarity"
+            }
+          },
+          "description": "Expectation value - lower is better",
+          "unit": "probability"
+        },
+        "identity_percent": {
+          "type": "float",
+          "range": [0, 100],
+          "interpretation": {
+            "high": {
+              "operator": ">=",
+              "value": 70,
+              "description": "High sequence identity"
+            },
+            "medium": {
+              "operator": ">=",
+              "value": 40,
+              "description": "Medium sequence identity"
+            },
+            "low": {
+              "operator": "<",
+              "value": 40,
+              "description": "Low sequence identity"
+            }
+          },
+          "description": "Percentage of identical residues",
+          "unit": "percent"
+        },
+        "coverage": {
+          "type": "float",
+          "range": [0, 100],
+          "interpretation": {
+            "high": {
+              "operator": ">=",
+              "value": 80,
+              "description": "High query coverage"
+            },
+            "medium": {
+              "operator": ">=",
+              "value": 50,
+              "description": "Medium query coverage"
+            },
+            "low": {
+              "operator": "<",
+              "value": 50,
+              "description": "Low query coverage"
+            }
+          },
+          "description": "Percentage of query sequence covered by alignment",
+          "unit": "percent"
+        }
+      },
+      "domain": "protein",
+      "description": "BLAST sequence alignment tool"
+    },
+
+    "esmfold": {
+      "metrics": {
+        "plddt": {
+          "type": "float",
+          "range": [0, 100],
+          "interpretation": {
+            "excellent": {
+              "operator": ">=",
+              "value": 90,
+              "description": "Excellent structure confidence"
+            },
+            "high": {
+              "operator": ">=",
+              "value": 70,
+              "description": "Reliable structure prediction"
+            },
+            "medium": {
+              "operator": ">=",
+              "value": 50,
+              "description": "Moderate confidence - use with caution"
+            },
+            "low": {
+              "operator": "<",
+              "value": 50,
+              "description": "Low confidence - unreliable"
+            }
+          },
+          "description": "Predicted LDDT score (per-residue confidence)",
+          "unit": "score"
+        }
+      },
+      "domain": "protein",
+      "description": "ESMFold protein structure prediction"
+    },
+
+    "alphafold": {
+      "metrics": {
+        "plddt": {
+          "type": "float",
+          "range": [0, 100],
+          "interpretation": {
+            "excellent": {
+              "operator": ">=",
+              "value": 90,
+              "description": "Very high confidence"
+            },
+            "high": {
+              "operator": ">=",
+              "value": 70,
+              "description": "Confident prediction"
+            },
+            "medium": {
+              "operator": ">=",
+              "value": 50,
+              "description": "Low confidence"
+            },
+            "low": {
+              "operator": "<",
+              "value": 50,
+              "description": "Very low confidence"
+            }
+          },
+          "description": "AlphaFold per-residue confidence score",
+          "unit": "score"
+        }
+      },
+      "domain": "protein",
+      "description": "AlphaFold protein structure prediction"
+    },
+
+    "rosetta": {
+      "metrics": {
+        "total_score": {
+          "type": "float",
+          "range": [-1000, 500],
+          "interpretation": {
+            "valid": {
+              "operator": "between",
+              "min": -500,
+              "max": 100,
+              "description": "Typical range for valid protein structures"
+            },
+            "favorable": {
+              "operator": "<=",
+              "value": -200,
+              "description": "Favorable energy - likely stable structure"
+            }
+          },
+          "description": "Rosetta total energy score",
+          "unit": "REU"
+        },
+        "rmsd": {
+          "type": "float",
+          "range": [0, 50],
+          "interpretation": {
+            "excellent": {
+              "operator": "<=",
+              "value": 1.0,
+              "description": "Excellent structural similarity"
+            },
+            "high": {
+              "operator": "<=",
+              "value": 2.5,
+              "description": "Good structural similarity"
+            },
+            "medium": {
+              "operator": "<=",
+              "value": 5.0,
+              "description": "Moderate structural similarity"
+            },
+            "low": {
+              "operator": ">",
+              "value": 5.0,
+              "description": "Low structural similarity"
+            }
+          },
+          "description": "Root Mean Square Deviation",
+          "unit": "Angstrom"
+        }
+      },
+      "domain": "protein",
+      "description": "Rosetta protein design and analysis suite"
+    },
+
+    "kegg_pathway_enrichment": {
+      "metrics": {
+        "p_value": {
+          "type": "float",
+          "range": [0, 1],
+          "interpretation": {
+            "high": {
+              "operator": "<=",
+              "value": 0.01,
+              "description": "Highly significant enrichment"
+            },
+            "medium": {
+              "operator": "<=",
+              "value": 0.05,
+              "description": "Significant enrichment"
+            },
+            "low": {
+              "operator": ">",
+              "value": 0.05,
+              "description": "Not significant"
+            }
+          },
+          "description": "Statistical significance of pathway enrichment",
+          "unit": "probability"
+        },
+        "fold_enrichment": {
+          "type": "float",
+          "range": [0, 100],
+          "interpretation": {
+            "high": {
+              "operator": ">=",
+              "value": 3.0,
+              "description": "Strong enrichment"
+            },
+            "medium": {
+              "operator": ">=",
+              "value": 1.5,
+              "description": "Moderate enrichment"
+            },
+            "low": {
+              "operator": "<",
+              "value": 1.5,
+              "description": "Weak or no enrichment"
+            }
+          },
+          "description": "Fold enrichment ratio",
+          "unit": "fold"
+        }
+      },
+      "domain": "pathway",
+      "description": "KEGG pathway enrichment analysis"
+    },
+
+    "docking": {
+      "metrics": {
+        "binding_affinity": {
+          "type": "float",
+          "range": [-20, 0],
+          "interpretation": {
+            "high": {
+              "operator": "<=",
+              "value": -9.0,
+              "description": "Strong binding affinity"
+            },
+            "medium": {
+              "operator": "<=",
+              "value": -7.0,
+              "description": "Moderate binding affinity"
+            },
+            "low": {
+              "operator": ">",
+              "value": -7.0,
+              "description": "Weak binding affinity"
+            }
+          },
+          "description": "Predicted binding affinity (more negative is better)",
+          "unit": "kcal/mol"
+        },
+        "rmsd": {
+          "type": "float",
+          "range": [0, 10],
+          "interpretation": {
+            "excellent": {
+              "operator": "<=",
+              "value": 2.0,
+              "description": "Excellent pose prediction"
+            },
+            "good": {
+              "operator": "<=",
+              "value": 3.0,
+              "description": "Good pose prediction"
+            },
+            "poor": {
+              "operator": ">",
+              "value": 3.0,
+              "description": "Poor pose prediction"
+            }
+          },
+          "description": "RMSD from reference pose",
+          "unit": "Angstrom"
+        }
+      },
+      "domain": "drug_discovery",
+      "description": "Molecular docking simulation"
+    },
+
+    "admet_prediction": {
+      "metrics": {
+        "qed": {
+          "type": "float",
+          "range": [0, 1],
+          "interpretation": {
+            "high": {
+              "operator": ">=",
+              "value": 0.7,
+              "description": "Drug-like properties"
+            },
+            "medium": {
+              "operator": ">=",
+              "value": 0.4,
+              "description": "Moderate drug-likeness"
+            },
+            "low": {
+              "operator": "<",
+              "value": 0.4,
+              "description": "Poor drug-likeness"
+            }
+          },
+          "description": "Quantitative Estimate of Drug-likeness",
+          "unit": "score"
+        },
+        "lipinski_violations": {
+          "type": "integer",
+          "range": [0, 5],
+          "interpretation": {
+            "good": {
+              "operator": "<=",
+              "value": 0,
+              "description": "Passes Lipinski's Rule of Five"
+            },
+            "acceptable": {
+              "operator": "<=",
+              "value": 1,
+              "description": "One violation acceptable"
+            },
+            "poor": {
+              "operator": ">",
+              "value": 1,
+              "description": "Multiple violations"
+            }
+          },
+          "description": "Number of Lipinski Rule of Five violations",
+          "unit": "count"
+        }
+      },
+      "domain": "drug_discovery",
+      "description": "ADMET property prediction"
+    },
+
+    "variant_analysis": {
+      "metrics": {
+        "cadd_score": {
+          "type": "float",
+          "range": [0, 50],
+          "interpretation": {
+            "high": {
+              "operator": ">=",
+              "value": 20,
+              "description": "Likely pathogenic"
+            },
+            "medium": {
+              "operator": ">=",
+              "value": 10,
+              "description": "Potentially deleterious"
+            },
+            "low": {
+              "operator": "<",
+              "value": 10,
+              "description": "Likely benign"
+            }
+          },
+          "description": "Combined Annotation Dependent Depletion score",
+          "unit": "phred_score"
+        },
+        "allele_frequency": {
+          "type": "float",
+          "range": [0, 1],
+          "interpretation": {
+            "common": {
+              "operator": ">=",
+              "value": 0.01,
+              "description": "Common variant"
+            },
+            "rare": {
+              "operator": ">=",
+              "value": 0.001,
+              "description": "Rare variant"
+            },
+            "very_rare": {
+              "operator": "<",
+              "value": 0.001,
+              "description": "Very rare variant"
+            }
+          },
+          "description": "Population allele frequency",
+          "unit": "frequency"
+        }
+      },
+      "domain": "disease",
+      "description": "Genetic variant pathogenicity analysis"
+    },
+
+    "gwas": {
+      "metrics": {
+        "p_value": {
+          "type": "float",
+          "range": [0, 1],
+          "interpretation": {
+            "genome_wide_significant": {
+              "operator": "<=",
+              "value": 5e-8,
+              "description": "Genome-wide significant association"
+            },
+            "suggestive": {
+              "operator": "<=",
+              "value": 1e-5,
+              "description": "Suggestive association"
+            },
+            "not_significant": {
+              "operator": ">",
+              "value": 1e-5,
+              "description": "Not significant"
+            }
+          },
+          "description": "GWAS association p-value",
+          "unit": "probability"
+        },
+        "odds_ratio": {
+          "type": "float",
+          "range": [0, 100],
+          "interpretation": {
+            "strong_risk": {
+              "operator": ">=",
+              "value": 2.0,
+              "description": "Strong risk factor"
+            },
+            "moderate_risk": {
+              "operator": ">=",
+              "value": 1.5,
+              "description": "Moderate risk factor"
+            },
+            "weak_risk": {
+              "operator": ">=",
+              "value": 1.0,
+              "description": "Weak or neutral"
+            },
+            "protective": {
+              "operator": "<",
+              "value": 1.0,
+              "description": "Protective factor"
+            }
+          },
+          "description": "Odds ratio for disease association",
+          "unit": "ratio"
+        }
+      },
+      "domain": "disease",
+      "description": "Genome-Wide Association Study analysis"
+    },
+
+    "gene_expression": {
+      "metrics": {
+        "log2_fold_change": {
+          "type": "float",
+          "range": [-10, 10],
+          "interpretation": {
+            "highly_upregulated": {
+              "operator": ">=",
+              "value": 2.0,
+              "description": "Highly upregulated (>4-fold)"
+            },
+            "upregulated": {
+              "operator": ">=",
+              "value": 1.0,
+              "description": "Upregulated (>2-fold)"
+            },
+            "downregulated": {
+              "operator": "<=",
+              "value": -1.0,
+              "description": "Downregulated (<0.5-fold)"
+            },
+            "highly_downregulated": {
+              "operator": "<=",
+              "value": -2.0,
+              "description": "Highly downregulated (<0.25-fold)"
+            },
+            "unchanged": {
+              "operator": "between",
+              "min": -1.0,
+              "max": 1.0,
+              "description": "No significant change"
+            }
+          },
+          "description": "Log2 fold change in gene expression",
+          "unit": "log2_fold"
+        },
+        "adjusted_p_value": {
+          "type": "float",
+          "range": [0, 1],
+          "interpretation": {
+            "significant": {
+              "operator": "<=",
+              "value": 0.05,
+              "description": "Statistically significant"
+            },
+            "not_significant": {
+              "operator": ">",
+              "value": 0.05,
+              "description": "Not statistically significant"
+            }
+          },
+          "description": "FDR-adjusted p-value",
+          "unit": "probability"
+        }
+      },
+      "domain": "pathway",
+      "description": "Differential gene expression analysis"
+    },
+
+    "protein_protein_interaction": {
+      "metrics": {
+        "confidence_score": {
+          "type": "float",
+          "range": [0, 1],
+          "interpretation": {
+            "high": {
+              "operator": ">=",
+              "value": 0.7,
+              "description": "High confidence interaction"
+            },
+            "medium": {
+              "operator": ">=",
+              "value": 0.4,
+              "description": "Medium confidence interaction"
+            },
+            "low": {
+              "operator": "<",
+              "value": 0.4,
+              "description": "Low confidence interaction"
+            }
+          },
+          "description": "Interaction confidence score",
+          "unit": "score"
+        }
+      },
+      "domain": "pathway",
+      "description": "Protein-protein interaction prediction"
+    }
+  },
+
+  "metadata": {
+    "created": "2025-12-21",
+    "author": "BioCoScientist v4.0",
+    "domains_supported": [
+      "protein",
+      "pathway",
+      "drug_discovery",
+      "disease"
+    ],
+    "notes": "All thresholds are based on common practices in computational biology. Adjust as needed for specific research contexts."
+  }
+}

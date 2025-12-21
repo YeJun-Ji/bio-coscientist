@@ -6,7 +6,7 @@ You are a research problem parser. Your task is to analyze a research problem st
 ## Your Task:
 Parse this problem into THREE main components:
 
-### 1. Background (배경/가설)
+### 1. Background
 Extract all contextual information, background knowledge, hypotheses, and motivation.
 This includes:
 - Scientific background
@@ -14,15 +14,15 @@ This includes:
 - Research motivation
 - Hypotheses being tested
 
-### 2. Input Data (입력 데이터) - Optional
+### 2. Input Data - Optional
 If the problem mentions specific input data, files, databases, or datasets, extract them here.
 Look for patterns like:
-- "입력 데이터:", "Input:", "데이터:"
+- "Input:", "Data:", "Input data:"
 - File references (*.csv, *.fasta, *.pdb, etc.)
 - Database references (KEGG, UniProt, PDB, etc.)
 - If no explicit input data is mentioned, set this to null.
 
-### 3. Requirements (문제의 요구사항)
+### 3. Requirements
 Extract what the problem ASKS FOR - what questions must the hypothesis answer?
 Think of each requirement as: "A good hypothesis must provide an answer to this question."
 
@@ -47,11 +47,11 @@ Classify each requirement based on what kind of answer is expected:
 
 | Requirement Type | Keywords | What the hypothesis must provide |
 |------------------|----------|----------------------------------|
-| answer | 설명, 제시, 답, explain, provide, what | A direct answer or explanation |
-| design | 설계, 제안, 발굴, 예측, design, propose, predict | A design proposal or prediction |
-| analysis | 분석, 비교, 탐색, 정리, analyze, compare, explore | An analytical result |
-| validation | 검증, 확인, 평가, validate, verify, evaluate | Validation evidence or reasoning |
-| synthesis | 통합, 모델링, 네트워크, integrate, model | An integrated model or framework |
+| answer | explain, provide, what, describe, state | A direct answer or explanation |
+| design | design, propose, predict, suggest, develop | A design proposal or prediction |
+| analysis | analyze, compare, explore, investigate, examine | An analytical result |
+| validation | validate, verify, evaluate, assess, test | Validation evidence or reasoning |
+| synthesis | integrate, model, combine, synthesize, unify | An integrated model or framework |
 
 ## Priority Classification:
 Assign priority based on importance:
@@ -68,28 +68,28 @@ For each requirement, determine:
 
 ### Dependency Pattern Recognition:
 
-| Pattern (Korean) | Pattern (English) | Interpretation |
-|-----------------|-------------------|----------------|
-| `(1,2,3)을 통합하여` | `integrating (1,2,3)` | depends_on: ["1", "2", "3"] |
-| `위 결과를 바탕으로` | `based on above results` | depends_on: all previous requirements |
-| `앞서 선정한 X를 사용하여` | `using the selected X from above` | depends_on: requirement that selects X |
-| `(1)에서 정의한` | `defined in (1)` | depends_on: ["1"] |
-| `이전 단계의 결과로` | `from previous step results` | depends_on: [previous requirement] |
-| `X와 Y를 결합하여` | `combining X and Y` | depends_on: [req for X, req for Y] |
+| Pattern (English) | Interpretation |
+|-------------------|----------------|
+| `integrating (1,2,3)` | depends_on: ["1", "2", "3"] |
+| `based on above results` | depends_on: all previous requirements |
+| `using the selected X from above` | depends_on: requirement that selects X |
+| `defined in (1)` | depends_on: ["1"] |
+| `from previous step results` | depends_on: [previous requirement] |
+| `combining X and Y` | depends_on: [req for X, req for Y] |
 
 ### Rules:
-1. **Explicit references**: `(1)`, `(2)` 등 명시적 참조 → 해당 ID 추가
-2. **Integration keywords**: 통합, 종합, 결합, integrate, synthesize → 참조된 모든 requirement 추가
-3. **Sequential implicit**: "위", "앞서", "이전" → 바로 이전 requirement에 의존
-4. **Independent requirements**: 다른 requirement 결과 없이 답변 가능 → depends_on: [], can_parallelize: true
-5. **Section independence**: 다른 섹션(A, B)의 requirement는 기본적으로 독립적
-6. **Be conservative**: 확실한 의존성만 표시, 불확실하면 독립으로 처리
+1. **Explicit references**: `(1)`, `(2)` explicit mentions → add those IDs
+2. **Integration keywords**: integrate, synthesize, combine → add all referenced requirements
+3. **Sequential implicit**: "above", "previous", "earlier" → depends on immediately previous requirement
+4. **Independent requirements**: Can be answered without other requirement results → depends_on: [], can_parallelize: true
+5. **Section independence**: Requirements in different sections (A, B) are typically independent
+6. **Be conservative**: Only mark dependencies when certain, default to independent when unsure
 
 ## Output Format:
 Respond with valid JSON only.
 
 **IMPORTANT: All output fields MUST be in English, even if the input problem is in another language.**
-- Translate all Korean text to English
+- Translate all non-English text to English
 - Use English for: title, background, requirement titles/descriptions, deliverables
 - Keep requirement_id format unchanged (numbers/letters)
 
@@ -137,33 +137,33 @@ Respond with valid JSON only.
 ### Example 1: Flat Parenthesized Format with Clear Dependencies
 Input:
 ```
-삼중음성유방암 치료제 후보 설계
-Background: TNFα-ΔNp63α axis가 TNBC 진행에 핵심적...
-(1) Binder의 TNFR1/2 결합 부위 선정
-(2) Binder의 생물물리적 제약 조건 반영
-(3) 후보 binder 서열 설계
+Triple-Negative Breast Cancer Therapeutic Candidate Design
+Background: TNFα-ΔNp63α axis is critical in TNBC progression...
+(1) Select TNFR1/2 binding site for the binder
+(2) Define biophysical constraints for the binder
+(3) Design candidate binder sequences
 ```
 
 **Dependency Analysis:**
-- (1): 독립적 - 결합 부위 선정은 다른 결과 불필요
-- (2): (1)에 의존 - 결합 부위가 정해져야 제약 조건 정의 가능
-- (3): (2)에 의존 - 제약 조건을 알아야 서열 설계 가능
+- (1): Independent - site selection doesn't require other results
+- (2): Depends on (1) - constraints require knowing the binding site
+- (3): Depends on (2) - sequence design requires knowing the constraints
 
-**Execution Order:** [["1"], ["2"], ["3"]] (완전 순차)
+**Execution Order:** [["1"], ["2"], ["3"]] (fully sequential)
 
 Output:
 ```json
 {
-  "title": "삼중음성유방암 치료제 후보 설계",
-  "background": "TNFα-ΔNp63α axis가 TNBC 진행에 핵심적...",
+  "title": "Triple-Negative Breast Cancer Therapeutic Candidate Design",
+  "background": "TNFα-ΔNp63α axis is critical in TNBC progression...",
   "input_data_description": null,
   "problem_type": "flat",
   "format_detected": "flat_paren_num",
   "major_sections": {},
   "requirements": [
-    {"requirement_id": "1", "title": "TNFR1/2 결합 부위 선정", "description": "Binder가 결합할 TNFR1/2 부위를 선정하고 그 이유를 제시", "parent_id": null, "expected_deliverables": ["선정된 결합 부위", "선정 근거"], "depends_on": [], "can_parallelize": true, "order": 0, "priority": 1, "requirement_type": "design"},
-    {"requirement_id": "2", "title": "생물물리적 제약 조건 정의", "description": "Binder 설계에 반영해야 할 생물물리적 제약 조건을 제시", "parent_id": null, "expected_deliverables": ["제약 조건 목록", "각 조건의 이유"], "depends_on": ["1"], "can_parallelize": false, "order": 1, "priority": 1, "requirement_type": "design"},
-    {"requirement_id": "3", "title": "후보 binder 서열 제안", "description": "위 조건을 만족하는 후보 binder 서열을 설계하고 제안", "parent_id": null, "expected_deliverables": ["Binder 서열", "서열 설계 근거"], "depends_on": ["2"], "can_parallelize": false, "order": 2, "priority": 1, "requirement_type": "design"}
+    {"requirement_id": "1", "title": "Select TNFR1/2 binding site", "description": "Select and justify the TNFR1/2 binding site for the binder", "parent_id": null, "expected_deliverables": ["Selected binding site", "Selection rationale"], "depends_on": [], "can_parallelize": true, "order": 0, "priority": 1, "requirement_type": "design"},
+    {"requirement_id": "2", "title": "Define biophysical constraints", "description": "Define biophysical constraints to be reflected in binder design", "parent_id": null, "expected_deliverables": ["List of constraints", "Rationale for each constraint"], "depends_on": ["1"], "can_parallelize": false, "order": 1, "priority": 1, "requirement_type": "design"},
+    {"requirement_id": "3", "title": "Propose candidate binder sequences", "description": "Design and propose candidate binder sequences satisfying the above constraints", "parent_id": null, "expected_deliverables": ["Binder sequences", "Design rationale"], "depends_on": ["2"], "can_parallelize": false, "order": 2, "priority": 1, "requirement_type": "design"}
   ]
 }
 ```
@@ -171,36 +171,36 @@ Output:
 ### Example 2: Parallel-capable Requirements with Integration
 Input:
 ```
-T 세포 유전자 간 기능 유사성 정량화
-Background: 기능적으로 유사한 유전자쌍은 발현 패턴, 단백질 구조, 진화적 계통이 유사...
-(1) LLM 기반 유전자 기능 요약 생성
-(2) LLM 기반 phylogenic tree 생성
-(3) Expression 기반 유사성 점수 생성
-(4) (1,2,3)을 통합한 Similarity Score로 주요 유전자쌍 제시
-(5) 단백질 구조 유사도 점수 생성
+Quantifying Functional Similarity Between T Cell Genes
+Background: Functionally similar gene pairs share expression patterns, protein structures, and evolutionary lineage...
+(1) Generate LLM-based gene function summaries
+(2) Generate LLM-based phylogenic tree
+(3) Generate expression-based similarity scores
+(4) Present key gene pairs using integrated Similarity Score from (1,2,3)
+(5) Generate protein structure similarity scores
 ```
 
 **Dependency Analysis:**
-- (1): 독립적 - LLM으로 직접 생성 가능
-- (2): 독립적 - LLM으로 직접 생성 가능
-- (3): 독립적 - Expression 데이터로 직접 계산
-- (4): (1), (2), (3)에 의존 ← "(1,2,3)을 통합한" 명시적 참조!
-- (5): 독립적 - 단백질 정보로 직접 계산
+- (1): Independent - can be generated directly by LLM
+- (2): Independent - can be generated directly by LLM
+- (3): Independent - can be computed directly from expression data
+- (4): Depends on (1), (2), (3) ← explicit reference "from (1,2,3)"!
+- (5): Independent - can be computed directly from protein data
 
 **Execution Order:** [["1", "2", "3", "5"], ["4"]]
-- Group 1: 1, 2, 3, 5 병렬 처리 가능!
-- Group 2: 4는 1,2,3 완료 후
+- Group 1: 1, 2, 3, 5 can be parallelized!
+- Group 2: 4 runs after 1,2,3 complete
 
 Output:
 ```json
 {
-  "title": "T 세포 유전자 간 기능 유사성 정량화",
+  "title": "Quantifying Functional Similarity Between T Cell Genes",
   "requirements": [
-    {"requirement_id": "1", "title": "유전자 기능 요약 생성", "depends_on": [], "can_parallelize": true, "order": 0},
-    {"requirement_id": "2", "title": "Phylogenic tree 생성", "depends_on": [], "can_parallelize": true, "order": 1},
-    {"requirement_id": "3", "title": "Expression 유사성 점수", "depends_on": [], "can_parallelize": true, "order": 2},
-    {"requirement_id": "4", "title": "통합 Similarity Score로 유전자쌍 제시", "depends_on": ["1", "2", "3"], "can_parallelize": false, "order": 3},
-    {"requirement_id": "5", "title": "단백질 구조 유사도 점수", "depends_on": [], "can_parallelize": true, "order": 4}
+    {"requirement_id": "1", "title": "Generate gene function summaries", "depends_on": [], "can_parallelize": true, "order": 0},
+    {"requirement_id": "2", "title": "Generate phylogenic tree", "depends_on": [], "can_parallelize": true, "order": 1},
+    {"requirement_id": "3", "title": "Expression similarity scores", "depends_on": [], "can_parallelize": true, "order": 2},
+    {"requirement_id": "4", "title": "Present gene pairs using integrated Similarity Score", "depends_on": ["1", "2", "3"], "can_parallelize": false, "order": 3},
+    {"requirement_id": "5", "title": "Protein structure similarity scores", "depends_on": [], "can_parallelize": true, "order": 4}
   ]
 }
 ```
@@ -208,13 +208,13 @@ Output:
 ### Example 3: Hierarchical Format
 Input:
 ```
-폐 섬유증 치료 타겟 발굴
+Pulmonary Fibrosis Treatment Target Discovery
 Background...
-(A) IL-11 상호작용 인자 분석
-    1. IL-11의 역할 정리
-    2. 상호작용자 목록 통합
-(B) binder 제안
-    1. 타겟 클래스 정의
+(A) IL-11 interaction factor analysis
+    1. Summarize IL-11 role
+    2. Integrate interactor lists
+(B) Binder proposal
+    1. Define target class
 ```
 
 Output format_detected: "hierarchical" with parent_id references.
@@ -222,7 +222,7 @@ Output format_detected: "hierarchical" with parent_id references.
 - B.1 depends on A (entire section)
 
 ### Key Difference: Step vs Requirement
-- **Step (old)**: "TNFR1/2 결합 부위 선정" - What to DO
-- **Requirement (new)**: "Binder가 결합할 TNFR1/2 부위를 선정하고 그 이유를 제시" - What to ANSWER
+- **Step (old)**: "Select TNFR1/2 binding site" - What to DO
+- **Requirement (new)**: "Select and justify the TNFR1/2 binding site for the binder" - What to ANSWER
 
 Now parse the given problem text and output the structured JSON.

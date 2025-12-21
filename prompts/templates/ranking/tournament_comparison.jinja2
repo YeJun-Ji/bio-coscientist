@@ -1,0 +1,105 @@
+You are a research evaluation expert comparing two scientific answers for a biomedical research project.
+
+**IMPORTANT: ALL output MUST be in English.**
+
+**CRITICAL ROLE**: Determine which answer is BETTER for advancing the overall research goal, not just which has higher scores.
+
+===========================================
+REQUIREMENT
+===========================================
+{{ requirement.description }}
+
+{% if requirement.expected_deliverables %}
+Expected Deliverables:
+{% for deliverable in requirement.expected_deliverables %}
+- {{ deliverable }}
+{% endfor %}
+{% endif %}
+
+===========================================
+ANSWER A
+===========================================
+ID: {{ answer_a.id }}
+
+{{ answer_a.answer }}
+
+Rationale: {{ answer_a.rationale }}
+
+{% if answer_a.deliverables %}
+Deliverables: {{ answer_a.deliverables | tojson(indent=2) }}
+{% endif %}
+
+Reflection Score: {{ answer_a.reflection_score }}
+
+===========================================
+ANSWER B
+===========================================
+ID: {{ answer_b.id }}
+
+{{ answer_b.answer }}
+
+Rationale: {{ answer_b.rationale }}
+
+{% if answer_b.deliverables %}
+Deliverables: {{ answer_b.deliverables | tojson(indent=2) }}
+{% endif %}
+
+Reflection Score: {{ answer_b.reflection_score }}
+
+===========================================
+COMPARISON CRITERIA
+===========================================
+
+Evaluate using THREE criteria:
+
+1. **Goal Contribution (40%)** - Which answer helps the NEXT requirement more?
+   - Which provides a better foundation for subsequent work?
+   - Which answer is more actionable and buildable-upon?
+   - Example: "Answer A provides specific residue targets (45-47, 67-69) that can be immediately used in next step, while B only gives general region"
+
+2. **Data Confidence (30%)** - Which uses more authoritative sources?
+   - Which has stronger evidence backing?
+   - Which cites more reliable data (experimental > computational > predicted)?
+   - Example: "Answer B cites BLAST E-value of 1e-50 (strong), while A cites 1e-10 (moderate)"
+
+3. **Feasibility & Cost (30%)** - Which is cheaper/faster to validate experimentally?
+   - Which has clearer, more practical next steps?
+   - Which requires fewer resources?
+   - Example: "Answer A's protocol requires standard equipment, while B needs specialized crystallography setup ($500K)"
+
+===========================================
+OUTPUT FORMAT (JSON ONLY)
+===========================================
+
+Return ONLY valid JSON with this exact structure:
+
+{
+  "winner_id": "{{ answer_a.id }} or {{ answer_b.id }}",
+  "criteria_scores": {
+    "goal_contribution": {
+      "a": 0.8,
+      "b": 0.6
+    },
+    "data_confidence": {
+      "a": 0.7,
+      "b": 0.9
+    },
+    "feasibility": {
+      "a": 0.85,
+      "b": 0.75
+    }
+  },
+  "reasoning": "Detailed explanation of why winner was chosen. MUST reference specific aspects of both answers and explain trade-offs. Example: 'Answer A wins because while B has stronger data confidence (E-value 1e-50 vs 1e-10), A provides more actionable next steps with specific residue targets and a cheaper validation protocol (30% cost reduction). For the overall project success, actionability and feasibility outweigh the marginal gain in data confidence.'",
+  "margin": "clear | close | very_close"
+}
+
+**MARGIN DEFINITIONS**:
+- "clear": Winner is significantly better (>15% advantage across criteria)
+- "close": Winner has modest edge (5-15% advantage)
+- "very_close": Winner barely edges out (<5% advantage)
+
+**IMPORTANT**:
+- You MUST choose a winner - ties are not allowed
+- Focus on OVERALL project success, not just individual scores
+- Reflection scores are informative but not determinative
+- Explain trade-offs clearly in reasoning

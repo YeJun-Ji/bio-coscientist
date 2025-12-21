@@ -1,18 +1,32 @@
 """
-Ranking Agent - RequirementAnswer Tournament System
+Ranking Agent - Score-Based Answer Ranking (v4.0)
 
-This agent ranks RequirementAnswers using ELO-based tournament
-for the Sequential Confirmation workflow.
+⚠️ DEPRECATED in v5.0: Use TournamentRankingAgent instead.
+⚠️ This agent will be removed in v6.0.
+
+This agent ranks RequirementAnswers using a simple composite score.
+Replaces the complex ELO tournament system with transparent score-based sorting.
+
+Key Features:
+- Simple composite score: verification_score * 0.5 + quality_score * 0.5
+- Instant ranking (no LLM calls, <0.01s)
+- Transparent and deterministic
+- Updates ELO ratings for backward compatibility
+
+Ranking Formula:
+    composite_score = verification_score * 0.5 + quality_score * 0.5
+
+Where:
+- verification_score: Objective (from LogVerificationAgent, fact-checked against logs)
+- quality_score: Subjective (from QualityAssessmentAgent, domain-agnostic evaluation)
+- 50/50 weight: Balances objective facts and subjective quality
 """
 
-import json
-import asyncio
 import logging
-from typing import List, Dict, Any, Optional
-from datetime import datetime
+import warnings
+from typing import Dict, Any, List
 
-from ..core import ResearchGoal, RequirementAnswer
-from ..external_apis import LLMClient
+from ..core import RequirementAnswer
 from ..memory import ContextMemory
 from .base_agent import BaseAgent
 
@@ -21,23 +35,44 @@ logger = logging.getLogger(__name__)
 
 class RankingAgent(BaseAgent):
     """
-    Ranks RequirementAnswers using ELO-based tournament system.
+    Ranking agent - sorts answers by composite score.
 
-    Features:
-    - Pairwise comparisons for answers within same requirement
-    - ELO rating updates after each match
-    - Multi-turn debates for high-rated answers
+    Unlike old ELO tournament (3-4 LLM calls, pairwise comparisons),
+    this agent uses simple score-based sorting:
+    1. Calculate composite_score for each answer
+    2. Sort by composite_score (descending)
+    3. Update ELO ratings for convergence check compatibility
+
+    NO LLM calls - instant ranking.
     """
 
-    def __init__(self, memory: ContextMemory, config: Dict[str, Any], llm_client: Optional[LLMClient] = None, **kwargs):
-        super().__init__(name="ranking", memory=memory, config=config, llm_client=llm_client, **kwargs)
-        # Read elo_k_factor from execution_plan (v3.0 config)
-        agent_cfg = config.get("execution_plan", {}).get("agent_config", {}).get("ranking", {})
-        self.k_factor = agent_cfg.get("elo_k_factor", 32)
-        # Track ELO changes during this run for memory synchronization
-        self._elo_changes: Dict[str, float] = {}
-        # Track wins/losses changes during this run for memory synchronization
-        self._win_loss_changes: Dict[str, Dict[str, int]] = {}
+    def __init__(
+        self,
+        memory: ContextMemory,
+        config: Dict[str, Any],
+        **kwargs
+    ):
+        super().__init__(
+            "ranking",
+            memory,
+            config,
+            llm_client=None,  # No LLM needed!
+            **kwargs
+        )
+
+        # Configurable weights (default: 50/50)
+        self.verification_weight = config.get("ranking", {}).get("verification_weight", 0.5)
+        self.quality_weight = config.get("ranking", {}).get("quality_weight", 0.5)
+
+        # Validate weights sum to 1.0
+        total_weight = self.verification_weight + self.quality_weight
+        if abs(total_weight - 1.0) > 0.001:
+            self.log(
+                f"⚠ Ranking weights don't sum to 1.0 ({total_weight}), normalizing...",
+                "warning"
+            )
+            self.verification_weight /= total_weight
+            self.quality_weight /= total_weight
 
     # ========== RequirementAnswer Helper Methods ==========
 
@@ -47,343 +82,187 @@ class RankingAgent(BaseAgent):
             return answer.get("id", "unknown")
         return getattr(answer, "id", "unknown")
 
-    def _get_answer_content(self, answer) -> str:
-        """Get answer content from dict or RequirementAnswer object"""
+    def _get_verification_score(self, answer) -> float:
+        """Get verification_score from dict or RequirementAnswer object"""
         if isinstance(answer, dict):
-            return answer.get("answer", "")
-        return getattr(answer, "answer", "")
+            # Try new field first, fall back to metadata
+            if "verification_score" in answer:
+                return float(answer["verification_score"])
+            return float(answer.get("metadata", {}).get("verification_score", 0.0))
 
-    def _get_answer_requirement_id(self, answer) -> str:
-        """Get requirement_id from dict or RequirementAnswer object"""
-        if isinstance(answer, dict):
-            return answer.get("requirement_id", "")
-        return getattr(answer, "requirement_id", "")
+        # Object form
+        if hasattr(answer, "verification_score"):
+            return float(answer.verification_score)
+        return float(getattr(answer, "metadata", {}).get("verification_score", 0.0))
 
-    def _get_answer_elo(self, answer) -> float:
-        """Get answer ELO from dict or RequirementAnswer object"""
+    def _get_quality_score(self, answer) -> float:
+        """Get quality_score from dict or RequirementAnswer object"""
         if isinstance(answer, dict):
-            return answer.get("elo_rating", 1200.0)
-        return getattr(answer, "elo_rating", 1200.0)
+            return float(answer.get("quality_score", 0.0))
+        return float(getattr(answer, "quality_score", 0.0))
 
-    def _set_answer_elo(self, answer, value: float) -> None:
-        """Set answer ELO for both dict and RequirementAnswer object"""
+    def _set_composite_score(self, answer, score: float):
+        """Set composite_score on dict or RequirementAnswer object"""
         if isinstance(answer, dict):
-            answer["elo_rating"] = value
+            answer["composite_score"] = score
         else:
-            answer.elo_rating = value
+            answer.composite_score = score
 
-    def _get_answer_wins(self, answer) -> int:
-        """Get answer wins from dict or RequirementAnswer object"""
+    def _set_elo_rating(self, answer, rating: float):
+        """Set ELO rating on dict or RequirementAnswer object"""
         if isinstance(answer, dict):
-            return answer.get("wins", 0)
-        return getattr(answer, "wins", 0)
-
-    def _set_answer_wins(self, answer, value: int) -> None:
-        """Set answer wins for both dict and RequirementAnswer object"""
-        if isinstance(answer, dict):
-            answer["wins"] = value
+            answer["elo_rating"] = rating
         else:
-            answer.wins = value
-
-    def _get_answer_losses(self, answer) -> int:
-        """Get answer losses from dict or RequirementAnswer object"""
-        if isinstance(answer, dict):
-            return answer.get("losses", 0)
-        return getattr(answer, "losses", 0)
-
-    def _set_answer_losses(self, answer, value: int) -> None:
-        """Set answer losses for both dict and RequirementAnswer object"""
-        if isinstance(answer, dict):
-            answer["losses"] = value
-        else:
-            answer.losses = value
-
-    def _get_answer_rationale(self, answer) -> str:
-        """Get rationale from dict or RequirementAnswer object"""
-        if isinstance(answer, dict):
-            return answer.get("rationale", "")
-        return getattr(answer, "rationale", "")
-
-    def _get_answer_deliverables(self, answer) -> Dict[str, Any]:
-        """Get deliverables from dict or RequirementAnswer object"""
-        if isinstance(answer, dict):
-            return answer.get("deliverables", {})
-        return getattr(answer, "deliverables", {})
+            answer.elo_rating = rating
 
     # ========== Main Entry Point ==========
 
     async def run(self, task: Dict[str, Any]) -> Dict[str, Any]:
         """
         Execute the agent's primary task (required by BaseAgent).
-        Delegates to run_for_answers for RequirementAnswer ranking.
-        """
-        return await self.run_for_answers(task)
-
-    async def run_for_answers(self, task: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Run tournament to rank RequirementAnswers for the SAME requirement.
-
-        This is the main entry point for Sequential Confirmation.
-        Only answers for the same requirement can be compared.
+        Ranks answers by composite score.
 
         Args:
             task: {
-                "requirement_id": str,
-                "answers": List[RequirementAnswer],
-                "requirement": Dict (optional, for context)
+                "answers": List[RequirementAnswer] (after quality assessment)
             }
 
         Returns:
             {
                 "status": "success" | "error",
-                "requirement_id": str,
-                "matches_conducted": int,
-                "rankings": List[Dict],
-                "elo_updates": Dict[str, float]
+                "ranked_answers": List[RequirementAnswer] (sorted by composite_score),
+                "scores": List[Dict] (ranking details)
             }
         """
-        import time
-        func_start = time.time()
+        # DEPRECATED v5.0: Warn users to migrate to TournamentRankingAgent
+        warnings.warn(
+            "RankingAgent (score-based) is deprecated in v5.0. "
+            "Use TournamentRankingAgent for relative evaluation instead. "
+            "This agent will be removed in v6.0.",
+            DeprecationWarning,
+            stacklevel=2
+        )
 
-        requirement_id = task.get("requirement_id", "")
         answers = task.get("answers", [])
-        requirement = task.get("requirement", {})
 
-        self.log(f"[ANSWER-RANKING] Running tournament for requirement {requirement_id}")
-        self.log(f"[ANSWER-RANKING] {len(answers)} answers to compare")
-
-        if len(answers) < 2:
-            self.log("[ANSWER-RANKING] Not enough answers for tournament")
+        if not answers:
+            self.log("WARNING: No answers provided for ranking", "warning")
             return {
                 "status": "success",
-                "requirement_id": requirement_id,
-                "matches_conducted": 0,
-                "rankings": self._get_answer_rankings(answers),
-                "elo_updates": {}
+                "ranked_answers": [],
+                "scores": []
             }
 
-        # Clear changes from previous run
-        self._elo_changes = {}
-        self._win_loss_changes = {}
+        self.log(f"[RANKING] Ranking {len(answers)} answers by composite score")
 
         try:
-            # Organize matches
-            matches = self._organize_answer_matches(answers)
-            self.log(f"[ANSWER-RANKING] Organized {len(matches)} matches")
+            ranked_answers = self.rank(answers)
 
-            # Execute matches in parallel
-            match_tasks = [
-                self._conduct_answer_match(
-                    match_config["answer_a"],
-                    match_config["answer_b"],
-                    requirement,
-                    match_config["debate_turns"]
-                )
-                for match_config in matches
+            # Extract scores for logging
+            scores = [
+                {
+                    "answer_id": self._get_answer_id(ans),
+                    "composite_score": getattr(ans, "composite_score", 0.0)
+                        if not isinstance(ans, dict) else ans.get("composite_score", 0.0),
+                    "verification_score": self._get_verification_score(ans),
+                    "quality_score": self._get_quality_score(ans),
+                    "elo_rating": getattr(ans, "elo_rating", 1200.0)
+                        if not isinstance(ans, dict) else ans.get("elo_rating", 1200.0)
+                }
+                for ans in ranked_answers
             ]
 
-            results = await asyncio.gather(*match_tasks)
-
-            # Update ELO ratings
-            for i, result in enumerate(results):
-                match_config = matches[i]
-                self._update_answer_elo_ratings(
-                    match_config["answer_a"],
-                    match_config["answer_b"],
-                    result["winner_id"]
+            self.log(f"[RANKING] ✓ Ranking complete")
+            for i, score_info in enumerate(scores, 1):
+                self.log(
+                    f"[RANKING]   {i}. {score_info['answer_id']}: "
+                    f"composite={score_info['composite_score']:.3f} "
+                    f"(verify={score_info['verification_score']:.3f}, "
+                    f"quality={score_info['quality_score']:.3f})"
                 )
-
-            # Get updated rankings
-            rankings = self._get_answer_rankings(answers)
-
-            # Update status to "ranked" for all answers
-            for answer in answers:
-                if isinstance(answer, dict):
-                    answer["status"] = "ranked"
-                else:
-                    answer.mark_ranked()
-
-            func_duration = time.time() - func_start
-            self.log(f"[ANSWER-RANKING] ✓ Complete ({func_duration:.2f}s)")
-            self.log(f"[ANSWER-RANKING] {len(results)} matches, top answer: {rankings[0]['id'] if rankings else 'N/A'}")
 
             return {
                 "status": "success",
-                "requirement_id": requirement_id,
-                "matches_conducted": len(results),
-                "rankings": rankings,
-                "elo_updates": dict(self._elo_changes),
-                "win_loss_updates": dict(self._win_loss_changes)
+                "ranked_answers": ranked_answers,
+                "scores": scores
             }
 
         except Exception as e:
-            self.log(f"[ANSWER-RANKING] ✗ Error: {e}", "error")
+            self.log(f"[RANKING] ✗ Error: {e}", "error")
             import traceback
-            self.log(f"[ANSWER-RANKING] {traceback.format_exc()}", "debug")
+            self.log(f"[RANKING] {traceback.format_exc()}", "debug")
             return {
                 "status": "error",
-                "requirement_id": requirement_id,
                 "message": str(e)
             }
 
-    def _organize_answer_matches(self, answers: List) -> List[Dict]:
-        """Organize tournament matches for answers"""
-        matches = []
+    # ========== Core Ranking Method ==========
 
-        # Sort by ELO for better matchups
-        sorted_answers = sorted(
+    def rank(self, answers: List) -> List:
+        """
+        Rank answers by composite score.
+
+        This is the core method - simple and transparent.
+
+        Process:
+        1. Calculate composite_score for each answer
+        2. Sort by composite_score (descending)
+        3. Update ELO ratings for backward compatibility
+
+        Args:
+            answers: List of RequirementAnswer (dict or object)
+
+        Returns:
+            Sorted list (highest composite_score first)
+        """
+        import time
+        start_time = time.time()
+
+        self.log(f"  │ Computing composite scores...")
+
+        # Calculate composite scores
+        for answer in answers:
+            verification_score = self._get_verification_score(answer)
+            quality_score = self._get_quality_score(answer)
+
+            # Composite score: weighted average
+            composite_score = (
+                verification_score * self.verification_weight +
+                quality_score * self.quality_weight
+            )
+
+            # Ensure valid range
+            composite_score = max(0.0, min(1.0, composite_score))
+
+            # Set composite score
+            self._set_composite_score(answer, composite_score)
+
+        # Sort by composite_score (descending)
+        self.log(f"  │ Sorting by composite_score...")
+        ranked_answers = sorted(
             answers,
-            key=lambda a: self._get_answer_elo(a),
+            key=lambda ans: getattr(ans, "composite_score", 0.0)
+                if not isinstance(ans, dict) else ans.get("composite_score", 0.0),
             reverse=True
         )
 
-        # Pairwise matching
-        for i in range(0, len(sorted_answers) - 1, 2):
-            elo_a = self._get_answer_elo(sorted_answers[i])
-            elo_b = self._get_answer_elo(sorted_answers[i + 1])
-            is_top_tier = (elo_a > 1400 and elo_b > 1400)
+        # Update ELO ratings for backward compatibility
+        # (Supervisor's convergence check uses answer.elo_rating)
+        self.log(f"  │ Updating ELO ratings for backward compatibility...")
+        base_elo = 1200.0
+        elo_increment = 50.0
 
-            matches.append({
-                "answer_a": sorted_answers[i],
-                "answer_b": sorted_answers[i + 1],
-                "debate_turns": 2 if is_top_tier else 1  # Fewer turns for answers
-            })
+        for i, answer in enumerate(ranked_answers):
+            # Higher rank = higher ELO
+            # Rank 1: 1200 + (n-0)*50 = 1200 + n*50
+            # Rank 2: 1200 + (n-1)*50
+            # ...
+            # Rank n: 1200 + 50
+            rank = i
+            elo_rating = base_elo + (len(ranked_answers) - rank) * elo_increment
+            self._set_elo_rating(answer, elo_rating)
 
-        return matches
+        duration = time.time() - start_time
+        self.log(f"  │ ✓ Ranking complete in {duration:.4f}s")
 
-    async def _conduct_answer_match(
-        self,
-        answer_a,
-        answer_b,
-        requirement: Dict[str, Any],
-        debate_turns: int
-    ) -> Dict[str, Any]:
-        """Conduct a tournament match between two answers"""
-        answer_a_id = self._get_answer_id(answer_a)
-        answer_b_id = self._get_answer_id(answer_b)
-
-        self.log(f"  Match: {answer_a_id} vs {answer_b_id}")
-
-        if not self.llm:
-            # Fallback: use ELO
-            elo_a = self._get_answer_elo(answer_a)
-            elo_b = self._get_answer_elo(answer_b)
-            winner_id = answer_a_id if elo_a >= elo_b else answer_b_id
-            return {"winner_id": winner_id, "rationale": "ELO fallback"}
-
-        try:
-            # Build answer comparison prompt
-            prompt = self.prompt_manager.get_prompt(
-                "ranking/answer_comparison",
-                requirement=requirement,
-                answer_a={
-                    "id": answer_a_id,
-                    "answer": self._get_answer_content(answer_a),
-                    "rationale": self._get_answer_rationale(answer_a),
-                    "deliverables": self._get_answer_deliverables(answer_a),
-                    "elo_rating": self._get_answer_elo(answer_a)
-                },
-                answer_b={
-                    "id": answer_b_id,
-                    "answer": self._get_answer_content(answer_b),
-                    "rationale": self._get_answer_rationale(answer_b),
-                    "deliverables": self._get_answer_deliverables(answer_b),
-                    "elo_rating": self._get_answer_elo(answer_b)
-                }
-            )
-
-            response = await self.llm.generate_json(
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                purpose="answer_comparison"
-            )
-
-            winner_choice = response.get("winner", "").upper()
-            if winner_choice == "A":
-                winner_id = answer_a_id
-            elif winner_choice == "B":
-                winner_id = answer_b_id
-            else:
-                # Fallback
-                elo_a = self._get_answer_elo(answer_a)
-                elo_b = self._get_answer_elo(answer_b)
-                winner_id = answer_a_id if elo_a >= elo_b else answer_b_id
-
-            return {
-                "winner_id": winner_id,
-                "rationale": response.get("rationale", ""),
-                "comparison": response
-            }
-
-        except Exception as e:
-            self.log(f"  Error in match: {e}", "warning")
-            elo_a = self._get_answer_elo(answer_a)
-            elo_b = self._get_answer_elo(answer_b)
-            winner_id = answer_a_id if elo_a >= elo_b else answer_b_id
-            return {"winner_id": winner_id, "rationale": f"Error fallback: {e}"}
-
-    def _update_answer_elo_ratings(self, answer_a, answer_b, winner_id: str) -> None:
-        """Update ELO ratings for answers after a match"""
-        answer_a_id = self._get_answer_id(answer_a)
-        answer_b_id = self._get_answer_id(answer_b)
-
-        elo_a = self._get_answer_elo(answer_a)
-        elo_b = self._get_answer_elo(answer_b)
-
-        # Calculate expected scores
-        expected_a = 1 / (1 + 10 ** ((elo_b - elo_a) / 400))
-        expected_b = 1 - expected_a
-
-        # Actual scores
-        if winner_id == answer_a_id:
-            actual_a, actual_b = 1, 0
-        else:
-            actual_a, actual_b = 0, 1
-
-        # Update ELO
-        new_elo_a = elo_a + self.k_factor * (actual_a - expected_a)
-        new_elo_b = elo_b + self.k_factor * (actual_b - expected_b)
-
-        self._set_answer_elo(answer_a, new_elo_a)
-        self._set_answer_elo(answer_b, new_elo_b)
-
-        # Track changes
-        self._elo_changes[answer_a_id] = new_elo_a
-        self._elo_changes[answer_b_id] = new_elo_b
-
-        # Update wins/losses
-        wins_a = self._get_answer_wins(answer_a)
-        losses_a = self._get_answer_losses(answer_a)
-        wins_b = self._get_answer_wins(answer_b)
-        losses_b = self._get_answer_losses(answer_b)
-
-        if winner_id == answer_a_id:
-            self._set_answer_wins(answer_a, wins_a + 1)
-            self._set_answer_losses(answer_b, losses_b + 1)
-            self._win_loss_changes[answer_a_id] = {"wins": wins_a + 1, "losses": losses_a}
-            self._win_loss_changes[answer_b_id] = {"wins": wins_b, "losses": losses_b + 1}
-        else:
-            self._set_answer_wins(answer_b, wins_b + 1)
-            self._set_answer_losses(answer_a, losses_a + 1)
-            self._win_loss_changes[answer_a_id] = {"wins": wins_a, "losses": losses_a + 1}
-            self._win_loss_changes[answer_b_id] = {"wins": wins_b + 1, "losses": losses_b}
-
-    def _get_answer_rankings(self, answers: List) -> List[Dict]:
-        """Get current rankings for answers sorted by ELO"""
-        ranked = sorted(
-            answers,
-            key=lambda a: self._get_answer_elo(a),
-            reverse=True
-        )
-
-        return [
-            {
-                "rank": i + 1,
-                "id": self._get_answer_id(a),
-                "requirement_id": self._get_answer_requirement_id(a),
-                "elo_rating": self._get_answer_elo(a),
-                "wins": self._get_answer_wins(a),
-                "losses": self._get_answer_losses(a)
-            }
-            for i, a in enumerate(ranked)
-        ]
+        return ranked_answers

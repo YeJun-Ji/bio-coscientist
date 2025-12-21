@@ -1,13 +1,20 @@
 """
-Evolution Agent - RequirementAnswer Evolution System
+Evolution Agent - Post-Confirmation Enrichment System (v3.0)
 
-This agent evolves and improves RequirementAnswers through various
-strategies for the Sequential Confirmation workflow.
+⚠️ DEPRECATED in v5.0: Use EvolutionArchitectAgent instead.
+⚠️ This agent will be removed in v6.0.
+
+NEW ROLE: After a RequirementAnswer is confirmed, this agent runs validation
+tools asynchronously to add credibility metrics and confidence scores.
+
+LEGACY ROLE (deprecated): Pre-confirmation answer improvement via grounding,
+coherence, etc. Legacy methods kept as _legacy_* for reference.
 """
 
 import json
 import logging
 import uuid
+import warnings
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
@@ -21,13 +28,16 @@ logger = logging.getLogger(__name__)
 
 class EvolutionAgent(BaseAgent):
     """
-    Evolves and improves RequirementAnswers for the Sequential Confirmation workflow.
+    Post-Confirmation Enrichment Agent (v3.0)
 
-    Evolution strategies:
-    - Grounding: Add more specific details and evidence
-    - Coherence: Improve alignment with confirmed dependencies
-    - Simplification: Remove unnecessary complexity
-    - Divergent: Explore alternative approaches
+    NEW ROLE:
+    After answer confirmation, executes ALL available validation tools asynchronously
+    to add credibility metrics (BLAST E-values, ESMFold pLDDT, etc.) and confidence
+    scores to confirmed answers.
+
+    DEPRECATED ROLE:
+    Pre-confirmation answer improvement via grounding, coherence, simplification,
+    divergent methods. These are kept as _legacy_* methods for reference.
     """
 
     def __init__(
@@ -83,340 +93,245 @@ class EvolutionAgent(BaseAgent):
             return answer.get("deliverables", {})
         return getattr(answer, "deliverables", {})
 
-    def _get_answer_review(self, answer) -> Optional[Dict[str, Any]]:
-        """Get review from dict or RequirementAnswer object"""
-        if isinstance(answer, dict):
-            return answer.get("review")
-        return getattr(answer, "review", None)
-
-    def _get_answer_iteration(self, answer) -> int:
-        """Get iteration from dict or RequirementAnswer object"""
-        if isinstance(answer, dict):
-            return answer.get("iteration", 1)
-        return getattr(answer, "iteration", 1)
-
-    def _get_answer_builds_on(self, answer) -> List[str]:
-        """Get builds_on from dict or RequirementAnswer object"""
-        if isinstance(answer, dict):
-            return answer.get("builds_on", [])
-        return getattr(answer, "builds_on", [])
-
     # ========== Main Entry Point ==========
 
     async def run(self, task: Dict[str, Any]) -> Dict[str, Any]:
         """
         Execute the agent's primary task (required by BaseAgent).
-        Delegates to run_for_answer for RequirementAnswer evolution.
+        Delegates to enrich_confirmed_answer for post-confirmation enrichment.
         """
-        return await self.run_for_answer(task)
+        # DEPRECATED v5.0: Warn users to migrate to EvolutionArchitectAgent
+        warnings.warn(
+            "EvolutionAgent is deprecated in v5.0. "
+            "Use EvolutionArchitectAgent for structured enrichment (protocol/literature/risk). "
+            "This agent will be removed in v6.0.",
+            DeprecationWarning,
+            stacklevel=2
+        )
 
-    async def run_for_answer(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        return await self.enrich_confirmed_answer(task)
+
+    # ========== Post-Confirmation Enrichment (v3.0) ==========
+
+    async def enrich_confirmed_answer(self, task: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Evolve a RequirementAnswer to create an improved version.
+        Post-confirmation enrichment: Run validation tools to add credibility metrics.
 
-        This is the main entry point for Sequential Confirmation.
-        Takes a parent answer and applies an evolution method to create
-        an improved child answer.
+        Workflow:
+        1. Select enrichment tools (LLM-based, using answer content)
+        2. Execute tools in parallel (asyncio.gather)
+        3. Compile enrichment data (extract metrics)
+        4. Update answer.metadata["enrichments"]
 
         Args:
-            task: {
-                "answer": RequirementAnswer,           # Parent answer to evolve
-                "requirement": Dict,                   # The requirement being answered
-                "context": Dict[str, RequirementAnswer],  # Confirmed answers from dependencies
-                "method": str                          # Evolution method (default: "grounding")
-            }
+            task: {"answer": RequirementAnswer (confirmed), "requirement": Dict}
 
         Returns:
-            {
-                "status": "success" | "error",
-                "evolved_answer": RequirementAnswer,
-                "method": str,
-                "improvements": List[str]
-            }
+            {"status": "success", "enrichments": Dict, "tools_executed": List[str]}
         """
         import time
         func_start = time.time()
 
         answer = task.get("answer")
         requirement = task.get("requirement", {})
-        context = task.get("context", {})
-        method = task.get("method", "grounding")
 
         if not answer:
             self.log("ERROR: 'answer' not provided in task", "error")
             return {"status": "error", "message": "answer not provided"}
 
         answer_id = self._get_answer_id(answer)
-        req_id = self._get_answer_requirement_id(answer)
-
-        self.log(f"[ANSWER-EVOLUTION] Evolving answer {answer_id} using '{method}'")
+        self.log(f"[POST-CONFIRM-ENRICH] Enriching confirmed answer {answer_id}")
 
         try:
-            # Apply evolution method
-            if method == "grounding":
-                evolved = await self._evolve_answer_grounding(answer, requirement, context)
-            elif method == "coherence":
-                evolved = await self._evolve_answer_coherence(answer, requirement, context)
-            elif method == "simplification":
-                evolved = await self._evolve_answer_simplification(answer, requirement, context)
-            elif method == "divergent":
-                evolved = await self._evolve_answer_divergent(answer, requirement, context)
-            else:
-                # Default to grounding
-                evolved = await self._evolve_answer_grounding(answer, requirement, context)
+            # Step 1: Select enrichment tools
+            tool_plan = await self._select_enrichment_tools(answer, requirement)
+            self.log(f"  Selected {len(tool_plan)} enrichment tools")
 
-            if evolved:
-                # Store in memory
-                self.memory.store_requirement_answer(evolved)
-
-                func_duration = time.time() - func_start
-                self.log(f"[ANSWER-EVOLUTION] ✓ Created evolved answer {evolved.id} ({func_duration:.2f}s)")
-
+            if not tool_plan:
+                self.log("  No enrichment tools selected - skipping enrichment")
                 return {
                     "status": "success",
-                    "evolved_answer": evolved,
-                    "method": method,
-                    "improvements": evolved.metadata.get("improvements", [])
-                }
-            else:
-                self.log("[ANSWER-EVOLUTION] ✗ Evolution produced no result")
-                return {
-                    "status": "error",
-                    "message": "Evolution produced no result"
+                    "enrichments": {},
+                    "tools_executed": []
                 }
 
+            # Step 2: Execute tools in parallel
+            from ..tools.executor import ToolExecutor
+            if not hasattr(self, 'tool_executor'):
+                self.tool_executor = ToolExecutor(
+                    self.tool_registry,
+                    self.mcp_manager,  # BaseAgent uses 'mcp_manager', not 'mcp_server_manager'
+                    self.llm
+                )
+
+            enrichment_results = await self.tool_executor.execute_tool_calls(
+                tool_calls=tool_plan,
+                parallel=True
+            )
+
+            # Step 3: Compile enrichment data
+            enrichment_data = self._compile_enrichment_data(enrichment_results)
+
+            # Step 4: Update answer metadata
+            if isinstance(answer, dict):
+                if "metadata" not in answer:
+                    answer["metadata"] = {}
+                answer["metadata"]["enrichments"] = enrichment_data
+            else:
+                if not answer.metadata:
+                    answer.metadata = {}
+                answer.metadata["enrichments"] = enrichment_data
+
+            tools_executed = [r["name"] for r in enrichment_results if r.get("status") == "success"]
+            func_duration = time.time() - func_start
+            self.log(f"[POST-CONFIRM-ENRICH] ✓ Complete: {len(tools_executed)} tools executed ({func_duration:.2f}s)")
+
+            return {
+                "status": "success",
+                "enrichments": enrichment_data,
+                "tools_executed": tools_executed
+            }
+
         except Exception as e:
-            self.log(f"[ANSWER-EVOLUTION] ✗ Error: {e}", "error")
+            self.log(f"[POST-CONFIRM-ENRICH] ✗ Error: {e}", "error")
             import traceback
-            self.log(f"[ANSWER-EVOLUTION] {traceback.format_exc()}", "debug")
+            self.log(f"[POST-CONFIRM-ENRICH] {traceback.format_exc()}", "debug")
             return {
                 "status": "error",
+                "answer_id": answer_id,
                 "message": str(e)
             }
 
-    async def _evolve_answer_grounding(
-        self,
-        answer,
-        requirement: Dict[str, Any],
-        context: Dict[str, Any]
-    ) -> Optional[RequirementAnswer]:
+    async def _select_enrichment_tools(self, answer, requirement) -> List[Dict[str, Any]]:
         """
-        Evolve answer by grounding with more specific details and evidence.
+        Use LLM to select validation tools based on answer content.
 
-        Grounding improvements:
-        - Add more specific values, sequences, methods
-        - Include additional supporting evidence
-        - Reduce vagueness
+        Returns: [{"name": "blast_search", "arguments": {...}}, ...]
         """
-        self.log("  Applying grounding evolution...")
+        if not self.tool_registry:
+            self.log("  Tool registry not available - cannot select tools", "warning")
+            return []
 
-        # Extract review feedback if available
-        review = self._get_answer_review(answer)
-        weaknesses = []
-        if review:
-            weaknesses = review.get("weaknesses", [])
-            weaknesses.extend(review.get("suggestions", []))
+        # Get all available tools from registry
+        available_tools = self.tool_registry.get_mcp_tools()
+        if not available_tools:
+            self.log("  No tools available in registry", "warning")
+            return []
 
-        # Build evolution prompt
-        parsed_problem = self.config.get("parsed_problem", {})
+        available_tools_list = [
+            f"- {tool.name}: {tool.description}"
+            for tool in available_tools
+        ]
 
+        # Build prompt
         prompt = self.prompt_manager.get_prompt(
-            "evolution/answer_evolution",
-            parsed_problem=parsed_problem,
-            requirement=requirement,
-            parent_answer={
-                "id": self._get_answer_id(answer),
-                "answer": self._get_answer_content(answer),
-                "rationale": self._get_answer_rationale(answer),
-                "deliverables": self._get_answer_deliverables(answer),
-                "review_weaknesses": weaknesses
-            },
-            context=self._format_context_for_prompt(context),
-            evolution_method="grounding",
-            focus="Add more specific details, concrete values, and supporting evidence"
-        )
-
-        return await self._generate_evolved_answer(answer, requirement, prompt, "grounding")
-
-    async def _evolve_answer_coherence(
-        self,
-        answer,
-        requirement: Dict[str, Any],
-        context: Dict[str, Any]
-    ) -> Optional[RequirementAnswer]:
-        """
-        Evolve answer by improving coherence with confirmed context.
-
-        Coherence improvements:
-        - Better alignment with dependency answers
-        - Stronger logical connections
-        - More consistent terminology
-        """
-        self.log("  Applying coherence evolution...")
-
-        parsed_problem = self.config.get("parsed_problem", {})
-
-        prompt = self.prompt_manager.get_prompt(
-            "evolution/answer_evolution",
-            parsed_problem=parsed_problem,
-            requirement=requirement,
-            parent_answer={
-                "id": self._get_answer_id(answer),
-                "answer": self._get_answer_content(answer),
-                "rationale": self._get_answer_rationale(answer),
+            "evolution/select_enrichment_tools",
+            answer={
+                "content": self._get_answer_content(answer),
                 "deliverables": self._get_answer_deliverables(answer)
             },
-            context=self._format_context_for_prompt(context),
-            evolution_method="coherence",
-            focus="Improve alignment with confirmed context and strengthen logical connections"
-        )
-
-        return await self._generate_evolved_answer(answer, requirement, prompt, "coherence")
-
-    async def _evolve_answer_simplification(
-        self,
-        answer,
-        requirement: Dict[str, Any],
-        context: Dict[str, Any]
-    ) -> Optional[RequirementAnswer]:
-        """
-        Evolve answer by simplifying complexity while maintaining quality.
-
-        Simplification improvements:
-        - Remove unnecessary complexity
-        - Focus on essential elements
-        - Improve clarity and actionability
-        """
-        self.log("  Applying simplification evolution...")
-
-        parsed_problem = self.config.get("parsed_problem", {})
-
-        prompt = self.prompt_manager.get_prompt(
-            "evolution/answer_evolution",
-            parsed_problem=parsed_problem,
             requirement=requirement,
-            parent_answer={
-                "id": self._get_answer_id(answer),
-                "answer": self._get_answer_content(answer),
-                "rationale": self._get_answer_rationale(answer),
-                "deliverables": self._get_answer_deliverables(answer)
-            },
-            context=self._format_context_for_prompt(context),
-            evolution_method="simplification",
-            focus="Remove unnecessary complexity while maintaining scientific rigor and completeness"
+            available_tools="\n".join(available_tools_list)
         )
-
-        return await self._generate_evolved_answer(answer, requirement, prompt, "simplification")
-
-    async def _evolve_answer_divergent(
-        self,
-        answer,
-        requirement: Dict[str, Any],
-        context: Dict[str, Any]
-    ) -> Optional[RequirementAnswer]:
-        """
-        Evolve answer by exploring a different approach.
-
-        Divergent improvements:
-        - Consider alternative methodologies
-        - Explore different perspectives
-        - Challenge assumptions
-        """
-        self.log("  Applying divergent evolution...")
-
-        parsed_problem = self.config.get("parsed_problem", {})
-
-        prompt = self.prompt_manager.get_prompt(
-            "evolution/answer_evolution",
-            parsed_problem=parsed_problem,
-            requirement=requirement,
-            parent_answer={
-                "id": self._get_answer_id(answer),
-                "answer": self._get_answer_content(answer),
-                "rationale": self._get_answer_rationale(answer),
-                "deliverables": self._get_answer_deliverables(answer)
-            },
-            context=self._format_context_for_prompt(context),
-            evolution_method="divergent",
-            focus="Explore an alternative approach while remaining scientifically valid"
-        )
-
-        return await self._generate_evolved_answer(answer, requirement, prompt, "divergent")
-
-    async def _generate_evolved_answer(
-        self,
-        parent_answer,
-        requirement: Dict[str, Any],
-        prompt: str,
-        method: str
-    ) -> Optional[RequirementAnswer]:
-        """Common method to generate evolved answer from prompt"""
-        if not self.llm:
-            self.log("LLM not configured", "warning")
-            return None
 
         try:
+            # LLM selects tools
             response = await self.llm.generate_json(
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.6,
-                purpose=f"evolve_answer_{method}"
+                temperature=0.3,
+                purpose="select_enrichment_tools"
             )
 
-            req_id = self._get_answer_requirement_id(parent_answer)
-            parent_id = self._get_answer_id(parent_answer)
-            answer_id = f"ra_{req_id}_{uuid.uuid4().hex[:8]}"
-
-            # Get requirement title
-            if isinstance(requirement, dict):
-                req_title = requirement.get("title", "")
-            else:
-                req_title = getattr(requirement, "title", "")
-
-            evolved = RequirementAnswer(
-                id=answer_id,
-                requirement_id=req_id,
-                requirement_title=req_title or (
-                    parent_answer.requirement_title if hasattr(parent_answer, 'requirement_title')
-                    else parent_answer.get("requirement_title", "")
-                ),
-                answer=response.get("answer", ""),
-                rationale=response.get("rationale", ""),
-                deliverables=response.get("deliverables", {}),
-                confidence=max(0.0, min(1.0, float(response.get("confidence", 0.6)))),
-                builds_on=self._get_answer_builds_on(parent_answer),
-                status="generated",
-                elo_rating=1200.0,
-                parent_ids=[parent_id],
-                evolution_method=method,
-                iteration=self._get_answer_iteration(parent_answer) + 1,
-                generated_at=datetime.now(),
-                generation_method="evolution",
-                metadata={
-                    "parent_id": parent_id,
-                    "evolution_method": method,
-                    "improvements": response.get("improvements", []),
-                    "comparison_to_parent": response.get("comparison_to_parent", "")
-                }
-            )
-
-            return evolved
+            tools = response.get("tools", [])
+            self.log(f"  LLM selected {len(tools)} tools")
+            return tools
 
         except Exception as e:
-            self.log(f"Error generating evolved answer: {e}", "error")
-            return None
+            self.log(f"  Error selecting enrichment tools: {e}", "error")
+            return []
 
-    def _format_context_for_prompt(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Format confirmed context for prompt"""
-        formatted = {}
-        for dep_id, answer in context.items():
-            if isinstance(answer, dict):
-                formatted[dep_id] = {
-                    "answer": answer.get("answer", "")[:400],
-                    "deliverables": answer.get("deliverables", {})
-                }
-            else:
-                formatted[dep_id] = {
-                    "answer": getattr(answer, "answer", "")[:400],
-                    "deliverables": getattr(answer, "deliverables", {})
-                }
-        return formatted
+    def _compile_enrichment_data(self, enrichment_results: List[Dict]) -> Dict[str, Any]:
+        """
+        Extract metrics from tool results and compile into structured enrichment data.
+
+        Extensible: Add elif blocks for new tools without code changes.
+
+        Returns:
+            {
+                "validation_metrics": {"blast_e_value": 1e-10, "esmfold_plddt": 85.3},
+                "confidence_scores": {"overall": 0.88, "sequence_validation": 0.95},
+                "additional_evidence": ["BLAST found 15 homologs...", ...],
+                "tool_results": {"blast_search": {...}, "fold_sequence": {...}}
+            }
+        """
+        enrichment_data = {
+            "validation_metrics": {},
+            "confidence_scores": {},
+            "additional_evidence": [],
+            "tool_results": {}
+        }
+
+        for result in enrichment_results:
+            if result.get("status") != "success":
+                continue
+
+            tool_name = result["name"]
+            tool_result = result.get("result", {})
+            enrichment_data["tool_results"][tool_name] = tool_result
+
+            # Tool-specific metric extraction (EXTENSIBLE - add new tools here!)
+
+            # BLAST or similar protein search
+            if tool_name in ["blast_search", "find_similar_proteins"]:
+                hits = tool_result.get("hits", [])
+                if hits:
+                    best_hit = hits[0]
+                    e_value = float(best_hit.get("evalue", best_hit.get("e_value", 1.0)))
+                    enrichment_data["validation_metrics"]["blast_e_value"] = e_value
+                    enrichment_data["additional_evidence"].append(
+                        f"BLAST validation: E-value={e_value:.2e}, {len(hits)} homologs found"
+                    )
+                    # Confidence: E < 1e-5 = high
+                    enrichment_data["confidence_scores"]["sequence_validation"] = (
+                        1.0 if e_value < 1e-5 else (0.5 if e_value < 1e-3 else 0.2)
+                    )
+
+            # ESMFold structure prediction
+            elif tool_name in ["fold_sequence", "esmfold_predict"]:
+                plddt_scores = tool_result.get("plddt", [])
+                if plddt_scores:
+                    mean_plddt = sum(plddt_scores) / len(plddt_scores)
+                    enrichment_data["validation_metrics"]["esmfold_mean_plddt"] = mean_plddt
+                    enrichment_data["additional_evidence"].append(
+                        f"ESMFold structure prediction: mean pLDDT={mean_plddt:.1f}"
+                    )
+                    # Confidence: >= 70 = high
+                    enrichment_data["confidence_scores"]["structure_validation"] = (
+                        min(1.0, mean_plddt / 90.0) if mean_plddt >= 50 else 0.3
+                    )
+
+            # Rosetta energy calculation
+            elif tool_name in ["calculate_rosetta_energy", "rosetta_score"]:
+                total_score = tool_result.get("total_score")
+                if total_score is not None:
+                    enrichment_data["validation_metrics"]["rosetta_total_score"] = total_score
+                    enrichment_data["additional_evidence"].append(
+                        f"Rosetta energy: total_score={total_score:.2f}"
+                    )
+                    # Confidence: negative score = favorable
+                    enrichment_data["confidence_scores"]["stability_validation"] = (
+                        min(1.0, max(0.0, (-total_score + 50) / 100))
+                    )
+
+            # ADD NEW TOOLS HERE without code changes!
+            # Example:
+            # elif tool_name == "new_validation_tool":
+            #     enrichment_data["validation_metrics"]["new_metric"] = ...
+
+        # Calculate overall confidence
+        if enrichment_data["confidence_scores"]:
+            enrichment_data["confidence_scores"]["overall"] = sum(
+                enrichment_data["confidence_scores"].values()
+            ) / len(enrichment_data["confidence_scores"])
+
+        return enrichment_data

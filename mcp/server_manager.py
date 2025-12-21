@@ -10,15 +10,35 @@ from dataclasses import dataclass
 
 from .client import MCPClient
 from .servers import (
+    # Original servers (7)
     KEGGServer,
     RosettaServer,
-    ReactomeServer,
     NCBIServer,
-    PyMolServer,
-    ScholarServer,
     ESMFoldServer,
     UniProtServer,
     BLASTServer,
+    PandasAnalysisServer,
+    # New servers - v1 (5)
+    STRINGDBServer,
+    ChEMBLServer,
+    NanoporeServer,
+    MSAServer,
+    FoldseekServer,
+    # New servers - v2 (10) - Problem 3 & 4 support
+    RCSBPDBServer,
+    InterProServer,
+    GProfilerServer,
+    OpenTargetsServer,
+    NetworkXServer,
+    IEDBServer,
+    VinaServer,
+    ProteinMPNNServer,
+    RFdiffusionServer,
+    ColabFoldServer,
+    # Removed servers (3) - commented for reference
+    # ReactomeServer,  # REMOVED: KEGG covers pathway + drug/compound functionality
+    # PyMolServer,  # REMOVED: Local visualization tool, not needed for automation
+    # ScholarServer,  # REMOVED: NCBI PubMed covers literature search
 )
 
 logger = logging.getLogger(__name__)
@@ -36,6 +56,7 @@ class ServerConfig:
     stages: List[str]
     category: str = "collection"  # "collection" | "analysis"
     enabled: bool = True
+    cwd: Optional[str] = None  # Working directory for server process
 
 
 class MCPServerManager:
@@ -51,16 +72,51 @@ class MCPServerManager:
     """
     
     # Available server classes
+    # Note: Reactome, PyMol, Scholar removed in MCP consolidation
+    # Reactome → KEGG covers pathway + drug/compound
+    # PyMol → Local visualization, not needed for automation
+    # Scholar → NCBI PubMed covers literature search
+    # Server configuration: 22 total (7 original + 5 v1 + 10 v2)
+    # Problem coverage:
+    # - P1(MSA, Foldseek), P2(Nanopore), P3(Rosetta+BLAST+RFdiffusion+ProteinMPNN+ColabFold)
+    # - P4(STRING+NetworkX+IEDB+OpenTargets+RCSB), P5(ChEMBL+STRING)
     SERVER_CLASSES = {
-        "kegg": KEGGServer,
-        "rosetta": RosettaServer,
-        "reactome": ReactomeServer,
-        "ncbi": NCBIServer,
-        "pymol": PyMolServer,
-        "scholar": ScholarServer,
-        "esmfold": ESMFoldServer,
-        "uniprot": UniProtServer,
-        "blast": BLASTServer,
+        # Data Collection (4)
+        "kegg": KEGGServer,           # Pathways, drugs, compounds, diseases
+        "ncbi": NCBIServer,           # PubMed, GenBank, gene info
+        "uniprot": UniProtServer,     # Protein sequences, annotations
+        "rcsbpdb": RCSBPDBServer,     # PDB structure download, binding sites (P3, P4)
+
+        # Data Analysis - Structure (4)
+        "esmfold": ESMFoldServer,     # Protein structure prediction
+        "rosetta": RosettaServer,     # Docking, energy calculation (P3)
+        "blast": BLASTServer,         # Sequence similarity, off-target (P3)
+        "foldseek": FoldseekServer,   # Structure similarity search (P1 Req.5)
+
+        # Data Analysis - Networks & Drugs (4)
+        "stringdb": STRINGDBServer,   # PPI networks (P4, P5)
+        "chembl": ChEMBLServer,       # Drug-target data (P5)
+        "networkx": NetworkXServer,   # Network analysis, hubs, communities (P4)
+        "opentargets": OpenTargetsServer,  # Druggability, target-drug (P4, P5)
+
+        # Data Analysis - Specialized (6)
+        "pandas_analysis": PandasAnalysisServer,  # CSV/data analysis
+        "nanopore": NanoporeServer,   # poly(A) analysis (P2)
+        "msa": MSAServer,             # Multiple sequence alignment (P1)
+        "interpro": InterProServer,   # Domain analysis (P3, P4)
+        "gprofiler": GProfilerServer, # GO/Pathway enrichment (P4)
+        "iedb": IEDBServer,           # MHC binding, immunogenicity (P3, P4)
+
+        # De novo Design - GPU required (4)
+        "vina": VinaServer,           # Molecular docking (P3, P5)
+        "proteinmpnn": ProteinMPNNServer,  # Sequence design for backbone (P3) - GPU 8GB+
+        "rfdiffusion": RFdiffusionServer,  # Binder backbone design (P3) - GPU 16GB+
+        "colabfold": ColabFoldServer,      # Complex structure prediction (P3, P4) - GPU 24GB+
+
+        # Removed servers (kept for reference)
+        # "reactome": ReactomeServer,  # → KEGG
+        # "pymol": PyMolServer,        # → Local tool
+        # "scholar": ScholarServer,    # → NCBI PubMed
     }
     
     def __init__(self, enabled_servers: Optional[List[str]] = None):
@@ -120,6 +176,7 @@ class MCPServerManager:
             problem_types=config_dict.get("problem_types", ["all"]),
             stages=config_dict.get("stages", ["all"]),
             category=config_dict.get("category", "collection"),
+            cwd=config_dict.get("cwd"),  # Working directory for servers with local imports
         )
         
         # Install if needed
@@ -132,7 +189,7 @@ class MCPServerManager:
                 raise
         
         # Create and start MCP client
-        client = MCPClient(config.command, config.args)
+        client = MCPClient(config.command, config.args, cwd=config.cwd)
         await client.start()
         
         # List available tools

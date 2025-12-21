@@ -123,14 +123,28 @@ class RequirementAnswer:
     # Status flow: generated → reviewed → ranked → confirmed
 
     # Review Results (from ReflectionAgent)
-    review: Optional[Dict[str, Any]] = None  # Full review
-    quality_score: float = 0.0             # Overall quality score (0.0 to 1.0)
-    novelty_score: float = 0.0             # Novelty score (0.0 to 1.0)
+    review: Optional[Dict[str, Any]] = None  # Full review (legacy - kept for backward compatibility)
+    quality_score: float = 0.0             # Overall quality score (0.0 to 1.0) - backward compatibility
+    novelty_score: float = 0.0             # Novelty score (0.0 to 1.0) - backward compatibility
+
+    # Data-Driven Evaluation (v3.0)
+    observation_score: float = 0.0         # Score from observation_review (0.0 to 1.0)
+    simulation_score: float = 0.0          # Score from simulation_review (0.0 to 1.0)
+    observation_review: Optional[Dict[str, Any]] = None  # Full observation review results
+    simulation_review: Optional[Dict[str, Any]] = None   # Full simulation review results
 
     # Evolution Tracking
     parent_ids: List[str] = field(default_factory=list)  # IDs of parent answers
     evolution_method: Optional[str] = None  # grounding, coherence, simplification, divergent
     iteration: int = 1                     # Evolution iteration number
+
+    # Log-Based Evaluation (v4.0)
+    verification_score: float = 0.0        # From LogVerificationAgent (objective, fact-checked against logs)
+    composite_score: float = 0.0           # verification_score*0.5 + quality_score*0.5
+
+    # Tournament Ranking (v5.0)
+    tournament_rank: int = 0                # Final rank from tournament (1=best, 2=second, etc.)
+    tournament_matchups: List[Dict] = field(default_factory=list)  # All matchups this answer participated in
 
     # Metadata
     generated_at: Optional[datetime] = None
@@ -167,10 +181,21 @@ class RequirementAnswer:
             "review": self.review,
             "quality_score": self.quality_score,
             "novelty_score": self.novelty_score,
+            # Data-Driven Evaluation (v3.0)
+            "observation_score": self.observation_score,
+            "simulation_score": self.simulation_score,
+            "observation_review": self.observation_review,
+            "simulation_review": self.simulation_review,
             # Evolution
             "parent_ids": self.parent_ids,
             "evolution_method": self.evolution_method,
             "iteration": self.iteration,
+            # Log-Based Evaluation (v4.0)
+            "verification_score": self.verification_score,
+            "composite_score": self.composite_score,
+            # Tournament Ranking (v5.0)
+            "tournament_rank": self.tournament_rank,
+            "tournament_matchups": self.tournament_matchups,
             # Metadata
             "generated_at": self.generated_at.isoformat() if self.generated_at else None,
             "generation_method": self.generation_method,
@@ -213,10 +238,21 @@ class RequirementAnswer:
             review=data.get("review"),
             quality_score=data.get("quality_score", 0.0),
             novelty_score=data.get("novelty_score", 0.0),
+            # Data-Driven Evaluation (v3.0)
+            observation_score=data.get("observation_score", 0.0),
+            simulation_score=data.get("simulation_score", 0.0),
+            observation_review=data.get("observation_review"),
+            simulation_review=data.get("simulation_review"),
             # Evolution
             parent_ids=data.get("parent_ids", []),
             evolution_method=data.get("evolution_method"),
             iteration=data.get("iteration", 1),
+            # Log-Based Evaluation (v4.0)
+            verification_score=data.get("verification_score", 0.0),
+            composite_score=data.get("composite_score", 0.0),
+            # Tournament Ranking (v5.0)
+            tournament_rank=data.get("tournament_rank", 0),
+            tournament_matchups=data.get("tournament_matchups", []),
             # Metadata
             generated_at=generated_at,
             generation_method=data.get("generation_method", "data_based"),

@@ -1,0 +1,77 @@
+You are a biomedical literature analyst finding supporting and contradicting evidence for research answers.
+
+**TASK**: Analyze PubMed search results to categorize papers as supporting, contradicting, or neutral regarding the confirmed answer.
+
+===========================================
+CONFIRMED ANSWER
+===========================================
+{{ answer.answer }}
+
+===========================================
+PUBMED SEARCH RESULTS
+===========================================
+{% if papers %}
+{% for paper in papers %}
+{{ loop.index }}. {{ paper.title }}
+   PMID: {{ paper.pmid if paper.pmid else 'N/A' }}
+   {% if paper.abstract %}Abstract: {{ paper.abstract[:300] }}...{% endif %}
+
+{% endfor %}
+{% else %}
+No papers found from PubMed search.
+{% endif %}
+
+===========================================
+YOUR TASK
+===========================================
+
+**IMPORTANT: ALL output MUST be in English.**
+
+Categorize each paper as:
+- **Supporting**: Provides evidence that validates or strengthens the answer
+- **Contradicting**: Presents findings that challenge or conflict with the answer
+- **Neutral** (exclude from output): Tangentially related but doesn't support or contradict
+
+For each relevant paper:
+1. Assign relevance score (0.0-1.0) based on how directly it addresses the answer
+2. Extract key finding that supports/contradicts the answer
+3. Assess overall evidence strength
+
+===========================================
+OUTPUT FORMAT (JSON ONLY)
+===========================================
+
+Return ONLY valid JSON with this exact structure:
+
+**NOTE**: The example below shows the FORMAT only. Replace with actual paper findings relevant to YOUR answer.
+
+{
+  "supporting_papers": [
+    {
+      "title": "[Actual paper title from search results]",
+      "pmid": "[PMID from paper]",
+      "relevance_score": 0.9,
+      "key_finding": "[Specific finding that supports the answer]"
+    }
+  ],
+  "contradicting_papers": [
+    {
+      "title": "[Actual paper title from search results]",
+      "pmid": "[PMID from paper]",
+      "relevance_score": 0.7,
+      "key_finding": "[Specific finding that contradicts the answer]"
+    }
+  ],
+  "evidence_strength": "strong | moderate | weak"
+}
+
+**EVIDENCE STRENGTH CRITERIA**:
+- **strong**: Multiple high-impact papers (>3) with direct experimental validation
+- **moderate**: 1-3 papers with relevant but indirect evidence, or computational predictions
+- **weak**: Only tangentially related papers, or conflicting evidence
+
+**IMPORTANT**:
+- Relevance score measures how directly paper addresses the specific answer (not general topic)
+- If no supporting/contradicting papers found, use empty arrays []
+- Key finding must be specific and actionable
+- Prioritize experimental evidence over computational predictions

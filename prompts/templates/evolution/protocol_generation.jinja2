@@ -1,0 +1,66 @@
+You are a biomedical research protocol designer generating experimental validation procedures.
+
+**TASK**: Generate a step-by-step experimental protocol to validate the following confirmed answer.
+
+===========================================
+CONFIRMED ANSWER
+===========================================
+{{ answer.answer }}
+
+{% if answer.deliverables %}
+Deliverables:
+{{ answer.deliverables | tojson(indent=2) }}
+{% endif %}
+
+===========================================
+YOUR TASK
+===========================================
+
+**IMPORTANT: ALL output MUST be in English.**
+
+Create a detailed, actionable experimental protocol that a wet-lab researcher can follow to validate this answer.
+
+**Requirements**:
+1. Break down into specific, sequential steps
+2. Include realistic time estimates
+3. List required materials (chemicals, reagents, equipment)
+4. Specify expected results/success criteria for each step
+5. Estimate overall cost and duration
+
+**Focus on practicality**: Use standard lab procedures where possible. Avoid overly complex or rare techniques unless absolutely necessary.
+
+===========================================
+OUTPUT FORMAT (JSON ONLY)
+===========================================
+
+Return ONLY valid JSON with this exact structure:
+
+**NOTE**: The example below shows the FORMAT. Design steps appropriate for YOUR specific answer.
+
+{
+  "steps": [
+    {
+      "step_number": 1,
+      "action": "[Specific experimental action based on the answer to validate]",
+      "duration": "[Realistic time estimate]",
+      "materials": ["[Specific reagent 1]", "[Specific reagent 2]", "[Equipment needed]"],
+      "expected_result": "[Measurable outcome that would validate the answer]"
+    },
+    {
+      "step_number": 2,
+      "action": "[Next experimental step]",
+      "duration": "[Time estimate]",
+      "materials": ["[Required materials]"],
+      "expected_result": "[Expected outcome]"
+    }
+  ],
+  "estimated_cost": "[Cost range in USD]",
+  "estimated_duration": "[Total timeline including optimization]",
+  "required_equipment": ["[Equipment 1]", "[Equipment 2]"]
+}
+
+**IMPORTANT**:
+- Provide AT LEAST 3 steps, AT MOST 10 steps
+- Be specific with material names (not just "reagents")
+- Include validation/quality check steps
+- Estimate costs realistically (consider consumables + labor)

@@ -19,16 +19,18 @@ class MCPClient:
     Supports Node.js, Python, and other MCP server implementations.
     """
     
-    def __init__(self, server_command: List[str], server_args: Optional[List[str]] = None):
+    def __init__(self, server_command: List[str], server_args: Optional[List[str]] = None, cwd: Optional[str] = None):
         """
         Initialize MCP client
 
         Args:
             server_command: Command to start the MCP server (e.g., ["node", "build/index.js"])
             server_args: Additional arguments for the server
+            cwd: Working directory for the server process
         """
         self.server_command = server_command
         self.server_args = server_args or []
+        self.cwd = cwd
         self.process: Optional[asyncio.subprocess.Process] = None
         self.request_id = 0
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -49,6 +51,7 @@ class MCPClient:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                cwd=self.cwd,  # Working directory for servers that need it (e.g., pandas)
                 limit=10 * 1024 * 1024  # 10MB buffer limit
             )
             self.logger.info(f"MCP server started: {' '.join(full_command)}")

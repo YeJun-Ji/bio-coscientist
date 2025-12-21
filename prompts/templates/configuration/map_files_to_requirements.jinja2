@@ -1,0 +1,29 @@
+Map data files to research requirements based on semantic analysis.
+
+**Available Files:**
+{{ files_desc }}
+
+**Requirements:**
+{{ requirements_desc }}
+
+**Task:**
+For each requirement, determine which files it needs based on:
+1. File names (e.g., "Q1.features" likely contains feature data for Question 1)
+2. File types (csv for tables, bam for genomics alignment, pod5 for nanopore signals)
+3. Requirement descriptions (what data does it need?)
+
+**Rules:**
+- A requirement can need multiple files
+- A file can be used by multiple requirements
+- If unsure, include the file (conservative mapping)
+- Use file name patterns to infer relevance
+- **ALL output MUST be in English**
+
+Return valid JSON:
+{
+  "mappings": {
+    "1": ["file1.csv", "file2.csv"],
+    "2": ["file1.csv"],
+    ...
+  }
+}

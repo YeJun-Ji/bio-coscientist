@@ -11,10 +11,10 @@ from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
 
-# .env 파일에서 환경변수 로드
+# Load environment variables from .env file
 load_dotenv()
 
-# 로깅 설정 - 파일과 콘솔 모두에 출력
+# Logging setup - output to both file and console
 def setup_logging(experiment_name: Optional[str] = None):
     """
     Set up dual logging configuration (console + full terminal log file).
@@ -117,18 +117,18 @@ class BioCoScientist:
     @staticmethod
     def default_config() -> Dict[str, Any]:
         """Return default configuration"""
-        # OpenRouter API 키 읽기
+        # Read OpenRouter API key
         api_key = os.getenv("OPENROUTER_API_KEY")
         if not api_key:
-            print("⚠️  경고: OPENROUTER_API_KEY 환경변수가 설정되지 않았습니다.")
-            print("   .env 파일에 OPENROUTER_API_KEY=your_key_here 를 추가하세요.")
+            print("⚠️  Warning: OPENROUTER_API_KEY environment variable is not set.")
+            print("   Please add OPENROUTER_API_KEY=your_key_here to your .env file.")
         
         return {
             "storage_path": "./research_memory",
             "llm": {
                 "provider": os.getenv("LLM_PROVIDER", "openrouter"),
                 "model": os.getenv("LLM_MODEL", "anthropic/claude-4.5-sonnet"),
-                "api_key": api_key,  # 환경변수에서 직접 읽기
+                "api_key": api_key,  # Read directly from environment variable
                 "temperature": 0.7,
                 "max_tokens": 8192
             },
@@ -221,7 +221,7 @@ class BioCoScientist:
         
         llm_config = self.config.get("llm", {})
         
-        # API 키 가져오기 - config에서 이미 환경변수 읽어서 저장됨
+        # Get API key - already read from environment and stored in config
         api_key = llm_config.get("api_key")
         if not api_key:
             self.logger.warning("No API key available, using basic parsing")
@@ -247,29 +247,29 @@ class BioCoScientist:
             raise
         
         extraction_prompt = f"""
-당신은 생물의학 연구 문제를 분석하는 전문가입니다.
-아래 문제 설명을 읽고, BioCoScientist 시스템에 입력할 구조화된 정보를 추출하세요.
+You are an expert in analyzing biomedical research problems.
+Read the problem description below and extract structured information for the BioCoScientist system.
 
-문제 설명:
+Problem Description:
 {problem_text}
 
-다음 형식의 JSON으로 응답하세요:
+Respond with JSON in the following format:
 {{
-  "goal_description": "연구 목표를 1-2문장으로 요약",
-  "domain": "연구 도메인 (예: Protein Engineering, Drug Discovery, Systems Biology 등)",
-  "focus_areas": ["구체적인 연구 영역 1", "구체적인 연구 영역 2", ...],
+  "goal_description": "Summarize research goal in 1-2 sentences",
+  "domain": "Research domain (e.g., Protein Engineering, Drug Discovery, Systems Biology, etc.)",
+  "focus_areas": ["Specific research area 1", "Specific research area 2", ...],
   "constraints": {{
-    "제약조건 키1": "값1",
-    "제약조건 키2": "값2"
+    "constraint_key1": "value1",
+    "constraint_key2": "value2"
   }},
-  "success_criteria": ["성공 기준 1", "성공 기준 2", ...]
+  "success_criteria": ["Success criterion 1", "Success criterion 2", ...]
 }}
 
-주의사항:
-- goal_description은 핵심 목표만 간결하게
-- focus_areas는 3-5개 정도의 구체적인 영역
-- constraints는 문제에서 명시된 제약조건이나 요구사항
-- success_criteria는 보고서에 포함될 내용이 다 포함되었는지 확인하는 기준
+Important:
+- goal_description should be concise and focus on core objectives only
+- focus_areas should list 3-5 specific areas
+- constraints are requirements or limitations specified in the problem
+- success_criteria are criteria to verify that the report includes all necessary content
 """
         
         try:
@@ -333,30 +333,30 @@ class BioCoScientist:
         self.logger.info(f"  - {len(export_data['reviews'])} reviews")
         self.logger.info(f"  - {len(export_data['overviews'])} overviews")
         
-        # 보고서 자동 생성
+        # Auto-generate report
         try:
             from biocoscientist.utils.report_generator import (
                 generate_final_research_report,
                 generate_report_from_json
             )
 
-            # reports 폴더 경로 생성
+            # Create reports folder path
             reports_dir = Path("reports")
             reports_dir.mkdir(exist_ok=True)
 
-            # 타임스탬프 생성
+            # Generate timestamp
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-            # 파일명 형식: BioCoScientist_Report_research_{timestamp}
+            # Filename format: BioCoScientist_Report_research_{timestamp}
             report_name = f"BioCoScientist_Report_research_{timestamp}"
 
-            # ★ NEW: 최고 가설 중심 연구 보고서 생성 (Markdown)
-            # results dict에서 직접 best_hypothesis 등 확장 데이터 사용
+            # ★ NEW: Generate best hypothesis-centered research report (Markdown)
+            # Use extended data like best_hypothesis directly from results dict
             final_report_path = str(reports_dir / f"{report_name}_FINAL.md")
             generate_final_research_report(results, final_report_path)
             self.logger.info(f"Final research report generated: {final_report_path}")
 
-            # Legacy: 통계 중심 보고서 (기존 형식 유지)
+            # Legacy: Statistics-centered report (maintain existing format)
             legacy_report_path = str(reports_dir / f"{report_name}_statistics.txt")
             generate_report_from_json(output_path, legacy_report_path, "full")
             self.logger.info(f"Statistics report generated: {legacy_report_path}")
@@ -368,11 +368,6 @@ class BioCoScientist:
         except Exception as e:
             self.logger.error(f"Failed to generate reports: {e}")
             print(f"⚠️  Report generation failed: {e}")
-
-
-# ============================================================================
-# Main Execution
-# ============================================================================
 
 def _save_readable_report(output_data: dict, report_file: Path):
     """Save a human-readable report in simple requirement-answer format"""
@@ -409,11 +404,11 @@ def _save_readable_report(output_data: dict, report_file: Path):
 
             # Rationale (if exists)
             if rationale and rationale.strip():
-                f.write(f"\n**이유/근거:**\n{rationale}\n")
+                f.write(f"\n**Rationale:**\n{rationale}\n")
 
             # Deliverables (simplified, only show non-empty ones)
             if deliverables and any(deliverables.values()):
-                f.write(f"\n**주요 결과:**\n")
+                f.write(f"\n**Key Results:**\n")
                 for key, value in deliverables.items():
                     if not value:  # Skip empty values
                         continue
@@ -422,11 +417,11 @@ def _save_readable_report(output_data: dict, report_file: Path):
                         # Show first few items for lists
                         items = value[:3]
                         items_str = ', '.join(str(v) for v in items)
-                        more = f" (및 {len(value) - 3}개 더)" if len(value) > 3 else ""
+                        more = f" (and {len(value) - 3} more)" if len(value) > 3 else ""
                         f.write(f"  - {key}: {items_str}{more}\n")
                     elif isinstance(value, dict) and len(value) > 0:
                         # For dicts, show compact representation
-                        f.write(f"  - {key}: {len(value)}개 항목\n")
+                        f.write(f"  - {key}: {len(value)} items\n")
                     elif isinstance(value, str) and len(value) > 0:
                         # For strings, truncate if too long
                         val_str = value[:100] + "..." if len(value) > 100 else value
@@ -440,9 +435,9 @@ def _save_readable_report(output_data: dict, report_file: Path):
         # Footer with simple stats
         stats = output_data.get("statistics", {})
         f.write(f"\n---\n")
-        f.write(f"**통계:** {stats.get('total_requirements', len(req_answers))}개 요구사항 완료 | ")
-        f.write(f"평균 품질: {stats.get('average_quality', 0):.2f} | ")
-        f.write(f"소요시간: {stats.get('duration_seconds', 0):.1f}초\n")
+        f.write(f"**Statistics:** {stats.get('total_requirements', len(req_answers))} requirements completed | ")
+        f.write(f"Average quality: {stats.get('average_quality', 0):.2f} | ")
+        f.write(f"Duration: {stats.get('duration_seconds', 0):.1f}s\n")
 
 
 async def main(problem_file: str, session_dir: Path):

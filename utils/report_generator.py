@@ -1,5 +1,5 @@
 """
-Report Generator - 연구 결과를 읽기 쉬운 보고서로 변환
+Report Generator - Convert research results into readable reports
 """
 
 import json
@@ -13,12 +13,12 @@ from ..prompts import PromptManager
 
 
 class ReportGenerator:
-    """연구 결과를 Markdown 보고서로 변환"""
-    
+    """Convert research results to Markdown reports"""
+
     def __init__(self, results_file: str):
         """
         Args:
-            results_file: research_results.json 파일 경로
+            results_file: Path to research_results.json file
         """
         with open(results_file, 'r', encoding='utf-8') as f:
             self.results = json.load(f)
@@ -28,7 +28,7 @@ class ReportGenerator:
         self.overviews = self.results.get('overviews', [])
     
     def generate_report(self, output_file: str = None) -> str:
-        """완전한 연구 보고서 생성"""
+        """Generate complete research report"""
         
         report_sections = [
             self._generate_header(),
@@ -51,7 +51,7 @@ class ReportGenerator:
         return report
     
     def _generate_header(self) -> str:
-        """보고서 헤더"""
+        """Generate report header"""
         return f"""# BioCoScientist Research Report
 
 **Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  
@@ -62,22 +62,22 @@ class ReportGenerator:
 """
     
     def _generate_executive_summary(self) -> str:
-        """요약"""
+        """Generate executive summary"""
         total = len(self.hypotheses)
         
-        # 상태별 카운트
+        # Count by status
         status_counts = {}
         for hyp in self.hypotheses:
             status = hyp.get('status', 'UNKNOWN')
             status_counts[status] = status_counts.get(status, 0) + 1
         
-        # 카테고리별 카운트
+        # Count by category
         category_counts = {}
         for hyp in self.hypotheses:
             cat = hyp.get('category', 'Unknown')
             category_counts[cat] = category_counts.get(cat, 0) + 1
         
-        # Top 5 가설
+        # Top 5 hypotheses
         top_hypotheses = sorted(
             [h for h in self.hypotheses if h.get('status') not in ['HypothesisStatus.REJECTED']],
             key=lambda x: x.get('elo_rating', 1200),
@@ -114,9 +114,9 @@ class ReportGenerator:
         return summary
     
     def _generate_methodology(self) -> str:
-        """방법론 섹션"""
+        """Generate methodology section"""
         
-        # 생성 방법 분석
+        # Analysis of generation methods
         generation_methods = {}
         for hyp in self.hypotheses:
             hyp_id = hyp.get('id', '')
@@ -170,9 +170,9 @@ Hypotheses underwent multi-stage evaluation:
         return methodology
     
     def _generate_hypothesis_results(self) -> str:
-        """가설 결과 상세"""
+        """Generate detailed hypothesis results"""
         
-        # 통과한 가설들
+        # Accepted hypotheses
         passed = [h for h in self.hypotheses if 'REJECTED' not in h.get('status', '')]
         
         results = """## Detailed Hypothesis Results
@@ -193,7 +193,7 @@ Hypotheses underwent multi-stage evaluation:
                 
                 results += f"**Full Content:**  \n{hyp.get('content', 'N/A')}\n\n"
                 
-                # 리뷰 정보
+                # Review information
                 if hyp.get('initial_review'):
                     review = hyp['initial_review']
                     results += f"**Initial Review:**  \n"
@@ -201,7 +201,7 @@ Hypotheses underwent multi-stage evaluation:
                     results += f"- Quality: {review.get('quality_score', 'N/A')}/10  \n"
                     results += f"- Novelty: {review.get('novelty_score', 'N/A')}/10  \n\n"
                 
-                # 진화 정보
+                # Evolution information
                 if hyp.get('parent_ids'):
                     results += f"**Evolved from:** {', '.join(hyp['parent_ids'])}  \n"
                     # Get evolution_method from metadata if not in top level
@@ -213,13 +213,13 @@ Hypotheses underwent multi-stage evaluation:
         else:
             results += "⚠️ No hypotheses passed the review process.\n\n"
         
-        # 거부된 가설 샘플
+        # Sample of rejected hypotheses
         rejected = [h for h in self.hypotheses if 'REJECTED' in h.get('status', '')]
         if rejected:
             results += f"\n### ❌ Rejected Hypotheses ({len(rejected)})\n\n"
             results += f"Showing top 3 rejected hypotheses by initial scores:\n\n"
             
-            # 초기 점수로 정렬
+            # Sort by initial score
             top_rejected = sorted(
                 rejected,
                 key=lambda x: (
@@ -234,7 +234,7 @@ Hypotheses underwent multi-stage evaluation:
                 results += f"#### {i}. {hyp.get('id', 'Unknown')}\n\n"
                 results += f"**Summary:** {hyp.get('summary', 'N/A')}\n\n"
                 
-                # 거부 이유
+                # Rejection reason
                 if hyp.get('initial_review'):
                     review = hyp['initial_review']
                     if not review.get('pass_review', False):
@@ -245,14 +245,14 @@ Hypotheses underwent multi-stage evaluation:
         return results
     
     def _generate_review_analysis(self) -> str:
-        """리뷰 분석"""
+        """Generate review analysis"""
         
         analysis = """## Review Analysis
 
 ### Review Statistics
 """
         
-        # 리뷰 타입별 통계
+        # Statistics by review type
         review_types = {}
         for review in self.reviews:
             rtype = review.get('review_type', 'unknown')
@@ -262,7 +262,7 @@ Hypotheses underwent multi-stage evaluation:
         for rtype, count in sorted(review_types.items(), key=lambda x: x[1], reverse=True):
             analysis += f"- **{rtype}:** {count}\n"
         
-        # 통과율
+        # Pass rate
         initial_reviews = [r for r in self.reviews if r.get('review_type') == 'initial']
         if initial_reviews:
             passed = sum(1 for r in initial_reviews if r.get('pass_review', False))
@@ -270,7 +270,7 @@ Hypotheses underwent multi-stage evaluation:
             analysis += f"\n#### Initial Review Pass Rate\n"
             analysis += f"- **Passed:** {passed}/{len(initial_reviews)} ({pass_rate:.1f}%)\n"
         
-        # 평균 점수
+        # Average scores
         if initial_reviews:
             avg_correctness = sum(r.get('correctness_score', 0) for r in initial_reviews) / len(initial_reviews)
             avg_quality = sum(r.get('quality_score', 0) for r in initial_reviews) / len(initial_reviews)
@@ -284,7 +284,7 @@ Hypotheses underwent multi-stage evaluation:
         return analysis
     
     def _generate_evolution_analysis(self) -> str:
-        """진화 분석"""
+        """Generate evolution analysis"""
         
         evolved = [h for h in self.hypotheses if h.get('parent_ids')]
         
@@ -297,7 +297,7 @@ Hypotheses underwent multi-stage evaluation:
 """
         
         if evolved:
-            # 진화 방법별 통계
+            # Statistics by evolution method
             evolution_methods = {}
             for hyp in evolved:
                 method = hyp.get('evolution_method', 'unknown')
@@ -307,7 +307,7 @@ Hypotheses underwent multi-stage evaluation:
             for method, count in sorted(evolution_methods.items(), key=lambda x: x[1], reverse=True):
                 analysis += f"- **{method}:** {count}\n"
             
-            # 진화 성공률
+            # Evolution success rate
             evolved_passed = [h for h in evolved if 'REJECTED' not in h.get('status', '')]
             success_rate = (len(evolved_passed) / len(evolved) * 100) if evolved else 0
             
@@ -317,7 +317,7 @@ Hypotheses underwent multi-stage evaluation:
         return analysis
     
     def _generate_recommendations(self) -> str:
-        """개선 권장사항"""
+        """Generate recommendations"""
         
         return """## Recommendations
 
@@ -350,7 +350,7 @@ Hypotheses underwent multi-stage evaluation:
 """
     
     def _generate_appendix(self) -> str:
-        """부록"""
+        """Generate appendix"""
         
         return f"""## Appendix
 
@@ -379,7 +379,7 @@ Hypotheses underwent multi-stage evaluation:
 """
     
     def generate_summary_report(self, output_file: str = None) -> str:
-        """간단한 요약 보고서만 생성"""
+        """Generate simple summary report only"""
         
         report = "\n\n".join([
             self._generate_header(),
@@ -997,7 +997,7 @@ if __name__ == "__main__":
     report_type = sys.argv[3] if len(sys.argv) > 3 else "full"
     
     if not output_file:
-        # 기본 출력 파일명 생성
+        # Generate default output filename
         base_name = Path(json_file).stem
         output_file = f"{base_name}_report.txt"
     

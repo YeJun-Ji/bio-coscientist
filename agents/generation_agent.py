@@ -84,6 +84,233 @@ class GenerationAgent(BaseAgent):
         self.log(f"GenerationAgent initialized with ToolRegistry ({len(self.tool_registry._tools)} tools) and PromptManager")
 
     # ========================================================================
+    # Data File Loading Utilities (NEW v3.1)
+    # ========================================================================
+
+    def _load_data_file(self, file_path: str, file_type: str = None, max_rows: int = 1000) -> Dict[str, Any]:
+        """
+        Load data file in various formats (CSV, BAM, POD5).
+
+        Args:
+            file_path: Absolute path to file
+            file_type: "csv", "bam", "pod5" (auto-detect from extension if None)
+            max_rows: Maximum rows to load (CSV only)
+
+        Returns:
+            {
+                "file_type": "csv" | "bam" | "pod5",
+                "file_name": str,
+                # CSV specific:
+                "headers": [...],
+                "rows": [...],
+                "num_rows": int,
+                "num_cols": int,
+                "truncated": bool,
+                # BAM specific:
+                "num_reads": int,
+                "references": [...],
+                "alignments_sample": [...],
+                # POD5 specific:
+                "num_reads": int,
+                "signal_summary": {...},
+                "read_ids_sample": [...]
+            }
+        """
+        import os
+        from pathlib import Path
+
+        try:
+            file_path_obj = Path(file_path)
+            file_name = file_path_obj.name
+
+            # Auto-detect file type from extension
+            if file_type is None:
+                suffix = file_path_obj.suffix.lower()
+                file_type = suffix[1:] if suffix else "unknown"
+
+            # CSV loading
+            if file_type == "csv":
+                return self._load_csv(file_path, file_name, max_rows)
+
+            # BAM loading
+            elif file_type == "bam":
+                return self._load_bam(file_path, file_name)
+
+            # POD5 loading
+            elif file_type == "pod5":
+                return self._load_pod5(file_path, file_name)
+
+            else:
+                return {
+                    "file_type": file_type,
+                    "file_name": file_name,
+                    "error": f"Unsupported file type: {file_type}"
+                }
+
+        except Exception as e:
+            self.log(f"Error loading {file_path}: {e}", level="error")
+            return {
+                "file_type": file_type or "unknown",
+                "file_name": os.path.basename(file_path),
+                "error": str(e)
+            }
+
+    def _load_csv(self, file_path: str, file_name: str, max_rows: int) -> Dict[str, Any]:
+        """Load CSV file using built-in csv module."""
+        import csv
+
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                headers = next(reader)  # First row as headers
+                rows = []
+                for i, row in enumerate(reader):
+                    if i >= max_rows:
+                        break
+                    rows.append(row)
+
+            truncated = len(rows) >= max_rows
+
+            return {
+                "file_type": "csv",
+                "file_name": file_name,
+                "headers": headers,
+                "rows": rows,
+                "num_rows": len(rows),
+                "num_cols": len(headers),
+                "truncated": truncated
+            }
+
+        except Exception as e:
+            return {
+                "file_type": "csv",
+                "file_name": file_name,
+                "error": f"CSV loading error: {str(e)}"
+            }
+
+    def _load_bam(self, file_path: str, file_name: str) -> Dict[str, Any]:
+        """Load BAM file using pysam."""
+        try:
+            import pysam
+
+            bam = pysam.AlignmentFile(file_path, "rb")
+
+            # Get basic info
+            references = list(bam.references) if bam.references else []
+
+            # Sample first 10 alignments
+            alignments_sample = []
+            for i, read in enumerate(bam):
+                if i >= 10:
+                    break
+                alignments_sample.append({
+                    "query_name": read.query_name,
+                    "reference_name": read.reference_name,
+                    "query_length": read.query_length,
+                    "mapping_quality": read.mapping_quality
+                })
+
+            # Try to count reads (may be slow for large files)
+            try:
+                bam.reset()
+                num_reads = sum(1 for _ in bam)
+            except:
+                num_reads = "unknown"
+
+            bam.close()
+
+            return {
+                "file_type": "bam",
+                "file_name": file_name,
+                "num_reads": num_reads,
+                "references": references[:10],  # First 10 references
+                "num_references": len(references),
+                "alignments_sample": alignments_sample
+            }
+
+        except ImportError:
+            return {
+                "file_type": "bam",
+                "file_name": file_name,
+                "error": "pysam not installed. Install with: pip install pysam"
+            }
+        except Exception as e:
+            return {
+                "file_type": "bam",
+                "file_name": file_name,
+                "error": f"BAM loading error: {str(e)}"
+            }
+
+    def _load_pod5(self, file_path: str, file_name: str) -> Dict[str, Any]:
+        """Load POD5 file using pod5 library."""
+        try:
+            import pod5
+            import numpy as np
+
+            with pod5.Reader(file_path) as reader:
+                # Get read count
+                num_reads = reader.num_reads
+
+                # Sample first 10 read IDs
+                read_ids_sample = []
+                signal_lengths = []
+                for i, read in enumerate(reader.reads()):
+                    if i >= 10:
+                        break
+                    read_ids_sample.append(str(read.read_id))
+                    signal_lengths.append(len(read.signal))
+
+                # Signal summary
+                signal_summary = {
+                    "mean_length": float(np.mean(signal_lengths)) if signal_lengths else 0,
+                    "sample_count": len(signal_lengths)
+                }
+
+            return {
+                "file_type": "pod5",
+                "file_name": file_name,
+                "num_reads": num_reads,
+                "signal_summary": signal_summary,
+                "read_ids_sample": read_ids_sample
+            }
+
+        except ImportError:
+            return {
+                "file_type": "pod5",
+                "file_name": file_name,
+                "error": "pod5 not installed. Install with: pip install pod5"
+            }
+        except Exception as e:
+            return {
+                "file_type": "pod5",
+                "file_name": file_name,
+                "error": f"POD5 loading error: {str(e)}"
+            }
+
+    def _compute_correlation(self, data1: list, data2: list) -> float:
+        """Compute Pearson correlation coefficient using NumPy."""
+        try:
+            import numpy as np
+            # Convert to float arrays
+            arr1 = np.array(data1, dtype=float)
+            arr2 = np.array(data2, dtype=float)
+            return float(np.corrcoef(arr1, arr2)[0, 1])
+        except Exception as e:
+            self.log(f"Correlation computation error: {e}", level="warning")
+            return 0.0
+
+    def _compute_euclidean_distance(self, vec1: list, vec2: list) -> float:
+        """Compute Euclidean distance between two vectors."""
+        try:
+            import numpy as np
+            arr1 = np.array(vec1, dtype=float)
+            arr2 = np.array(vec2, dtype=float)
+            return float(np.linalg.norm(arr1 - arr2))
+        except Exception as e:
+            self.log(f"Distance computation error: {e}", level="warning")
+            return 0.0
+
+    # ========================================================================
     # Main Entry Point (Required by BaseAgent)
     # ========================================================================
 
@@ -512,7 +739,7 @@ class GenerationAgent(BaseAgent):
         VALID_PRIORITIES = {"required", "recommended", "optional"}
         VALID_DATA_TYPES = {"sequence", "structure", "pathway", "interaction",
                            "literature", "expression", "variant", "binding_affinity",
-                           "mutation_effect", "taxonomy", "all"}
+                           "mutation_effect", "taxonomy", "domain", "annotation", "all"}
 
         try:
             # Check required keys
@@ -659,103 +886,30 @@ class GenerationAgent(BaseAgent):
             self.log(f"  │ Using legacy truncation (no DataFileManager)")
             truncated_data = self._truncate_data_for_prompt(collected_data)
 
-        # Get static constraints
-        static_constraints = self._extract_static_constraints()
-
-        # Build prompt for diverse answer generation
-        self.log(f"  │ Building prompt for {num_answers} diverse answers...")
-        prompt = self.prompt_manager.get_prompt(
-            "generation/diverse_answers",
-            parsed_problem=parsed_problem,
-            research_goal=research_goal,
-            requirement={
-                "requirement_id": req_id,
-                "title": req_title,
-                "description": req_description,
-                "requirement_type": req_type,
-                "expected_deliverables": expected_deliverables,
-                "depends_on": depends_on
-            },
-            context=context_for_prompt,
-            data_sources={},  # Empty - Chain 1 data not needed
-            analysis_results=truncated_data.get("analysis", {}),  # Full results
-            constraints=static_constraints.get("hard", []),
-            num_answers=num_answers
-        )
-        self.log(f"  │ Prompt prepared: {len(prompt)} chars")
+        # NOTE: Removed old single-prompt generation code
+        # Now using parallel generation with _generate_single_answer()
 
         try:
-            self.log(f"  │ Calling LLM.generate_json()...")
-            llm_start = time.time()
-            response = await self.llm.generate_json(
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.8,  # Higher for diversity
-                purpose=f"diverse_answers_{req_id}"
-            )
-            llm_duration = time.time() - llm_start
-            self.log(f"  │ ✓ LLM responded in {llm_duration:.2f}s")
+            # === PARALLEL GENERATION: 3 independent LLM calls ===
+            self.log(f"  │ Launching {num_answers} parallel answer generations...")
+            parallel_start = time.time()
 
-            # Parse response into RequirementAnswer objects
-            answers = []
-            raw_answers = response.get("answers", [])
-            self.log(f"  │ Parsing {len(raw_answers)} answers...")
+            strategies = ["conservative", "moderate", "aggressive"][:num_answers]
 
-            for i, ans_data in enumerate(raw_answers):
-                answer_id = f"ra_{req_id}_{uuid.uuid4().hex[:8]}"
-
-                # Determine approach/strategy for this answer
-                approach = ans_data.get("approach", f"approach_{i+1}")
-
-                # Extract tool usage info
-                tool_usage = collected_data.get("tool_usage", {})
-
-                # Build comprehensive metadata with entity-based tracking
-                metadata = {
-                    "approach": approach,
-                    "strategy": ans_data.get("strategy", ""),
-                    "innovation_level": ans_data.get("innovation_level", "moderate"),
-
-                    # === NEW: File paths ===
-                    "data_files": collected_data.get("_file_paths", {}),
-
-                    # Entity analysis (NEW!)
-                    "entity_analysis": collected_data.get("entity_analysis", {}),
-
-                    # Data collection tracking
-                    "data_collection": {
-                        "servers_used": list(collected_data.get("sources", {}).keys()),
-                        "tools": tool_usage.get("collection_tools", []),
-                        "sources_file": collected_data.get("_file_paths", {}).get("sources_file"),  # NEW
-                        # REMOVED: "sources_detail" (now in file)
-                    },
-
-                    # Data analysis tracking
-                    "data_analysis": {
-                        "analyses_performed": collected_data.get("entity_analysis", {}).get("analysis_needs", []),
-                        "tools": tool_usage.get("analysis_tools", []),
-                        "results_file": collected_data.get("_file_paths", {}).get("results_file"),  # NEW
-                        # REMOVED: "results" (now in file)
-                    }
-                }
-
-                answer = RequirementAnswer(
-                    id=answer_id,
-                    requirement_id=req_id,
-                    requirement_title=req_title,
-                    answer=ans_data.get("answer", ""),
-                    rationale=ans_data.get("rationale", ""),
-                    deliverables=ans_data.get("deliverables", {}),
-                    confidence=max(0.0, min(1.0, float(ans_data.get("confidence", 0.5)))),
-                    builds_on=depends_on,
-                    status="generated",
-                    elo_rating=1200.0,
-                    generated_at=datetime.now(),
-                    generation_method="data_based_diverse",
-                    data_sources=list(collected_data.get("sources", {}).keys()),
-                    metadata=metadata
+            # Create parallel tasks for each strategy
+            import asyncio
+            answer_tasks = [
+                self._generate_single_answer(
+                    requirement, research_goal, collected_data, context, strategy
                 )
-                answers.append(answer)
-                self.log(f"  │    [{i+1}/{len(raw_answers)}] Created: {answer_id} ({approach})")
+                for strategy in strategies
+            ]
+
+            # Execute all strategies in parallel
+            answers = await asyncio.gather(*answer_tasks)
+
+            parallel_duration = time.time() - parallel_start
+            self.log(f"  │ ✓ All {len(answers)} answers generated in parallel ({parallel_duration:.2f}s)")
 
             func_duration = time.time() - func_start
             self.log(f"  └─ FUNCTION COMPLETED ({func_duration:.2f}s) - {len(answers)} answers")
@@ -768,6 +922,191 @@ class GenerationAgent(BaseAgent):
             self.log(f"  │ {traceback.format_exc()}", "debug")
             self.log(f"  └─ FUNCTION FAILED")
             return []
+
+    async def _generate_single_answer(
+        self,
+        requirement: Dict[str, Any],
+        research_goal: ResearchGoal,
+        collected_data: Dict[str, Any],
+        context: Dict[str, RequirementAnswer],
+        strategy: str
+    ) -> RequirementAnswer:
+        """
+        Generate a single answer using a specified strategy.
+
+        This method is used for parallel answer generation - each strategy
+        (conservative, moderate, aggressive) gets its own independent LLM call.
+
+        Args:
+            requirement: The requirement to answer
+            research_goal: Overall research goal
+            collected_data: Data from 2-Chain collection
+            context: Confirmed answers from dependencies
+            strategy: "conservative", "moderate", or "aggressive"
+
+        Returns:
+            Single RequirementAnswer object
+        """
+        import time
+        func_start = time.time()
+
+        # Extract requirement details
+        if isinstance(requirement, dict):
+            req_id = requirement.get("requirement_id", requirement.get("step_id", ""))
+            req_title = requirement.get("title", "")
+            req_description = requirement.get("description", "")
+            req_type = requirement.get("requirement_type", "answer")
+            expected_deliverables = requirement.get("expected_deliverables", [])
+            depends_on = requirement.get("depends_on", [])
+        else:
+            req_id = getattr(requirement, "requirement_id", "")
+            req_title = getattr(requirement, "title", "")
+            req_description = getattr(requirement, "description", "")
+            req_type = getattr(requirement, "requirement_type", "answer")
+            expected_deliverables = getattr(requirement, "expected_deliverables", [])
+            depends_on = getattr(requirement, "depends_on", [])
+
+        self.log(f"  │ Generating {strategy} answer for {req_id}...")
+
+        # Prepare context for prompt
+        parsed_problem = self.config.get("parsed_problem", {})
+
+        # Convert context to serializable format
+        context_for_prompt = {}
+        for dep_id, answer in context.items():
+            if isinstance(answer, dict):
+                context_for_prompt[dep_id] = answer
+            else:
+                context_for_prompt[dep_id] = {
+                    "requirement_id": answer.requirement_id,
+                    "requirement_title": answer.requirement_title,
+                    "answer": answer.answer,
+                    "rationale": answer.rationale,
+                    "deliverables": answer.deliverables,
+                    "confidence": answer.confidence
+                }
+
+        # File-based mode with fallback (same as _generate_diverse_answers)
+        if self.data_file_manager and "_file_paths" in collected_data:
+            analysis_results = self.data_file_manager.load_analysis_results(req_id)
+            truncated_data = {
+                "sources": {},
+                "analysis": analysis_results,
+                "_file_paths": collected_data["_file_paths"],
+                "_metadata_only": False
+            }
+        else:
+            truncated_data = self._truncate_data_for_prompt(collected_data)
+
+        # Get static constraints
+        static_constraints = self._extract_static_constraints()
+
+        # Build prompt using single_answer template
+        prompt = self.prompt_manager.get_prompt(
+            "generation/single_answer",
+            parsed_problem=parsed_problem,
+            research_goal=research_goal,
+            requirement={
+                "requirement_id": req_id,
+                "title": req_title,
+                "description": req_description,
+                "requirement_type": req_type,
+                "expected_deliverables": expected_deliverables,
+                "depends_on": depends_on
+            },
+            context=context_for_prompt,
+            data_sources={},
+            analysis_results=truncated_data.get("analysis", {}),
+            constraints=static_constraints.get("hard", []),
+            strategy=strategy
+        )
+
+        try:
+            # Call LLM with strategy-specific prompt
+            llm_start = time.time()
+            response = await self.llm.generate_json(
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.8,
+                purpose=f"single_answer_{strategy}_{req_id}"
+            )
+            llm_duration = time.time() - llm_start
+
+            # Parse response into RequirementAnswer
+            approach = response.get("approach", strategy)
+            innovation_level = response.get("innovation_level", "moderate")
+
+            # Generate unique answer ID
+            timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
+            answer_id = f"ans_{req_id}_{strategy}_{timestamp}"
+
+            # Create metadata - INCLUDE entity_analysis, data_collection, data_analysis
+            metadata = {
+                # Generation parameters
+                "approach": approach,
+                "innovation_level": innovation_level,
+                "strategy": response.get("strategy", ""),
+                "data_references": response.get("data_references", []),
+
+                # Entity analysis (from Stage 1)
+                "entity_analysis": collected_data.get("entity_analysis", {}),
+
+                # Data collection (from Stage 2 - Chain 1)
+                "data_collection": {
+                    "servers_used": list(collected_data.get("sources", {}).keys()),
+                    "tools": collected_data.get("tool_usage", {}).get("collection_tools", []),
+                    "sources_file": collected_data.get("_file_paths", {}).get("sources")
+                },
+
+                # Data analysis (from Stage 2 - Chain 2)
+                "data_analysis": {
+                    "analyses_performed": list(collected_data.get("analysis", {}).keys()),
+                    "tools": collected_data.get("tool_usage", {}).get("analysis_tools", []),
+                    "results_file": collected_data.get("_file_paths", {}).get("analysis")
+                }
+            }
+
+            # Create RequirementAnswer object
+            answer = RequirementAnswer(
+                id=answer_id,
+                requirement_id=req_id,
+                requirement_title=req_title,
+                answer=response.get("answer", ""),
+                rationale=response.get("rationale", ""),
+                deliverables=response.get("deliverables", {}),
+                confidence=response.get("confidence", 0.5),
+                status="generated",
+                elo_rating=1200.0,
+                generated_at=datetime.now(),
+                generation_method=f"data_based_{strategy}",
+                data_sources=list(collected_data.get("sources", {}).keys()),
+                metadata=metadata
+            )
+
+            # Store in memory
+            self.memory.store_requirement_answer(answer)
+
+            func_duration = time.time() - func_start
+            self.log(f"  │ ✓ {strategy} answer generated in {func_duration:.2f}s (LLM: {llm_duration:.2f}s)")
+
+            return answer
+
+        except Exception as e:
+            self.log(f"  │ ✗ Error generating {strategy} answer: {e}", "error")
+            import traceback
+            self.log(f"  │ {traceback.format_exc()}", "debug")
+
+            # Return empty answer on error
+            timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
+            answer_id = f"ans_{req_id}_{strategy}_error_{timestamp}"
+            return RequirementAnswer(
+                id=answer_id,
+                requirement_id=req_id,
+                requirement_title=req_title,
+                answer="Error generating answer",
+                rationale=str(e),
+                status="generated",
+                metadata={"approach": strategy, "error": str(e)}
+            )
 
     async def generate_evolved_answer(
         self,
@@ -965,7 +1304,70 @@ class GenerationAgent(BaseAgent):
         }
         self.log("[STAGE-2] ✓ Data structure initialized")
 
-        # ========== Chain 1: 데이터 수집 ==========
+        # Step 2.5: Load input data files if available (NEW v3.1)
+        self.log("[STAGE-2] Step 2.5: Loading input data files...")
+        input_data_catalog = self.config.get("input_data_catalog", {})
+
+        if input_data_catalog.get("has_input_files"):
+            file_mappings = input_data_catalog.get("requirement_mappings", {})
+            files_for_req = file_mappings.get(req_id, [])
+
+            if files_for_req:
+                self.log(f"[STAGE-2]   Requirement {req_id} needs {len(files_for_req)} file(s)")
+
+                loaded_files = {}
+                for file_name in files_for_req:
+                    # Find file info
+                    file_info = next(
+                        (f for f in input_data_catalog["files"] if f["file_name"] == file_name),
+                        None
+                    )
+                    if file_info:
+                        self.log(f"[STAGE-2]   Loading {file_name} ({file_info['file_type']})...")
+                        loaded = self._load_data_file(file_info["file_path"])
+
+                        if "error" in loaded:
+                            self.log(f"[STAGE-2]   ⚠️  Error loading {file_name}: {loaded['error']}", level="warning")
+                        else:
+                            loaded_files[file_name] = loaded
+                            self.log(f"[STAGE-2]   ✓ Loaded {file_name}")
+
+                if loaded_files:
+                    # Build file paths dictionary for tools that need full data access
+                    file_paths = {}
+                    for file_name in files_for_req:
+                        file_info = next(
+                            (f for f in input_data_catalog["files"] if f["file_name"] == file_name),
+                            None
+                        )
+                        if file_info:
+                            file_paths[file_name] = {
+                                "path": file_info["file_path"],
+                                "type": file_info["file_type"],
+                                "size_kb": file_info["file_size_kb"]
+                            }
+
+                    # Add loaded files to sources with BOTH preview data AND file paths
+                    collected_data["sources"]["input_files"] = {
+                        "tool": "data_file_loader",
+                        "result": loaded_files,  # Preview data (max 1000 rows for CSV, samples for BAM/POD5)
+                        "file_paths": file_paths,  # Full file paths for tools that need complete data
+                        "metadata": {
+                            "num_files": len(loaded_files),
+                            "file_names": list(loaded_files.keys()),
+                            "usage_note": "Use 'result' for data preview/structure inspection, use 'file_paths' for full data analysis"
+                        }
+                    }
+                    self.log(f"[STAGE-2] ✓ Loaded {len(loaded_files)} data file(s) (preview mode)")
+                    self.log(f"[STAGE-2]   Full file paths available for: {list(file_paths.keys())}")
+                else:
+                    self.log("[STAGE-2]   No files successfully loaded")
+            else:
+                self.log(f"[STAGE-2]   No files mapped to requirement {req_id}")
+        else:
+            self.log("[STAGE-2]   No input data files available (MCP-only mode)")
+
+        # ========== Chain 1: Data Collection ==========
         self.log("=" * 60)
         self.log("[CHAIN-1] 🔗 STARTING DATA COLLECTION CHAIN (Entity-Based)")
         self.log("=" * 60)
@@ -985,12 +1387,21 @@ class GenerationAgent(BaseAgent):
             # LLM tool calling prompt for Chain 1 (NEW: uses entity_analysis)
             self.log("[CHAIN-1] [2/5] Preparing prompt for LLM tool selection...")
             tool_names = ', '.join([t['function']['name'] for t in collection_tools])
+
+            # Get input data file paths if available (from Step 2.5)
+            input_data_files = {}
+            if "input_files" in collected_data.get("sources", {}):
+                input_data_files = collected_data["sources"]["input_files"].get("file_paths", {})
+                if input_data_files:
+                    self.log(f"[CHAIN-1]    Input data files available: {list(input_data_files.keys())}")
+
             collection_prompt = self.prompt_manager.get_prompt(
                 'generation/chain1_collection',
                 research_goal=research_goal,
                 entity_analysis=entity_analysis,  # NEW: Pass entity_analysis instead of target_name
                 tool_names=tool_names,
-                context_refinements=entity_analysis.get("context_refinements", {})  # NEW
+                context_refinements=entity_analysis.get("context_refinements", {}),  # NEW
+                input_data_files=input_data_files  # NEW: Pass input file paths for pandas tools
             )
             self.log(f"[CHAIN-1] ✓ Prompt prepared ({len(collection_prompt)} chars)")
             self.log(f"[CHAIN-1]    Entity-driven tool selection enabled")
@@ -1091,7 +1502,7 @@ class GenerationAgent(BaseAgent):
                 self.log(f"[CHAIN-1] ⚠️  Failed to save files: {e}", "warning")
                 # Continue without files (fallback to old truncation)
 
-        # ========== Chain 2: 데이터 분석 ==========
+        # ========== Chain 2: Data Analysis ==========
         self.log("=" * 60)
         self.log("[CHAIN-2] 🔬 STARTING DATA ANALYSIS CHAIN (Entity-Based)")
         self.log("=" * 60)
@@ -1125,6 +1536,12 @@ class GenerationAgent(BaseAgent):
         # LLM tool calling prompt for Chain 2 (NEW: uses entity_analysis)
         self.log("[CHAIN-2] [3/5] Preparing prompt for LLM tool selection...")
         analysis_tool_names = ', '.join([t['function']['name'] for t in analysis_tools])
+
+        # Get input data file paths if available
+        input_data_files = {}
+        if "input_files" in collected_data.get("sources", {}):
+            input_data_files = collected_data["sources"]["input_files"].get("file_paths", {})
+
         analysis_prompt = self.prompt_manager.get_prompt(
             'generation/chain2_analysis',
             research_goal=research_goal,
@@ -1132,7 +1549,8 @@ class GenerationAgent(BaseAgent):
             analysis_needs=entity_analysis.get("analysis_needs", []),  # NEW
             collected_data_summary=data_summary,
             tool_names=analysis_tool_names,
-            context_refinements=entity_analysis.get("context_refinements", {})  # NEW
+            context_refinements=entity_analysis.get("context_refinements", {}),  # NEW
+            input_data_files=input_data_files  # NEW: Pass input file paths for pandas tools
         )
         self.log(f"[CHAIN-2] ✓ Prompt prepared ({len(analysis_prompt)} chars)")
         self.log(f"[CHAIN-2]    Analysis needs: {entity_analysis.get('analysis_needs', [])}")
@@ -1156,6 +1574,12 @@ class GenerationAgent(BaseAgent):
             tool_calls = analysis_result.get("tool_calls", [])
             self.log(f"[CHAIN-2] ✓ LLM responded in {llm_duration:.2f}s")
             self.log(f"[CHAIN-2] ✓ LLM selected {len(tool_calls)} tool(s) to execute")
+
+            # Debug: Log tool calls and arguments
+            for tc in tool_calls:
+                tool_name = tc.get("name", "unknown")
+                args = tc.get("arguments", {})
+                self.log(f"[CHAIN-2]    - {tool_name}: {len(args)} argument(s) - {list(args.keys()) if args else '[]'}", "debug")
 
             # Execute analysis tool calls
             self.log("[CHAIN-2] [5/5] Executing analysis tools...")
@@ -1289,6 +1713,31 @@ class GenerationAgent(BaseAgent):
         summary_parts = []
 
         for source, data in collected_data.get("sources", {}).items():
+            # Special handling for input_files - show absolute paths prominently
+            if source == "input_files" and isinstance(data, dict):
+                summary_parts.append("### Input Data Files (IMPORTANT: Use these absolute paths)\n")
+                file_paths = data.get("file_paths", {})
+                if file_paths:
+                    summary_parts.append("**Available Data Files:**\n")
+                    for file_name, file_info in file_paths.items():
+                        abs_path = file_info.get("path", "")
+                        file_type = file_info.get("type", "unknown")
+                        summary_parts.append(f"- `{file_name}`: `{abs_path}` ({file_type})\n")
+                    summary_parts.append("\n**⚠️ IMPORTANT**: When calling pandas_analysis tools (read_metadata_tool, etc.), ")
+                    summary_parts.append("you MUST use the absolute paths shown above, NOT relative paths like 'Q1.genelist.csv'.\n\n")
+
+                # Also show a sample of the data
+                result_data = data.get("result", {})
+                if result_data:
+                    summary_parts.append("**Data Preview:**\n")
+                    for file_name, preview in list(result_data.items())[:2]:  # Limit preview
+                        try:
+                            preview_str = json.dumps(preview, indent=2, default=str)[:800]
+                        except (TypeError, ValueError):
+                            preview_str = str(preview)[:800]
+                        summary_parts.append(f"_{file_name}_:\n```json\n{preview_str}\n```\n")
+                continue
+
             if isinstance(data, list):
                 # Multiple results from same source
                 summary_parts.append(f"### {source}\n")

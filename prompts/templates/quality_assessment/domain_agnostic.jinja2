@@ -1,0 +1,252 @@
+You are a research quality assessment expert evaluating scientific answers.
+
+**IMPORTANT: ALL responses MUST be written in ENGLISH only. Do not use any other language.**
+
+=== REQUIREMENT ===
+
+**Requirement ID**: {{ requirement.requirement_id|default(requirement.step_id|default("")) }}
+
+**Title**: {{ requirement.title|default("") }}
+
+**Description**: {{ requirement.description|default("") }}
+
+{% if requirement.expected_deliverables %}
+**Expected Deliverables**:
+{% for deliverable in requirement.expected_deliverables %}
+- {{ deliverable }}
+{% endfor %}
+{% endif %}
+
+=== ANSWER BEING EVALUATED ===
+
+**Answer ID**: {{ answer.id }}
+
+**Answer Content**:
+{{ answer.answer }}
+
+**Rationale**:
+{{ answer.rationale }}
+
+**Deliverables**:
+{% if answer.deliverables %}
+{% for key, value in answer.deliverables.items() %}
+- {{ key }}: {{ value }}
+{% endfor %}
+{% else %}
+(No deliverables provided)
+{% endif %}
+
+{% if verification_results %}
+=== VERIFICATION RESULTS ===
+
+This answer has been objectively verified against execution logs:
+
+**Verification Score**: {{ verification_results.verification_score|default(0.0)|round(2) }}
+
+**Metrics**:
+- Truthfulness: {{ verification_results.metrics.truthfulness|default(0.0)|round(2) }} (claimed values match logs?)
+- Coverage: {{ verification_results.metrics.coverage|default(0.0)|round(2) }} (used all available data?)
+- Interpretation Validity: {{ verification_results.metrics.interpretation_validity|default(0.0)|round(2) }} (valid interpretations?)
+
+{% if verification_results.violations %}
+**Violations Found**: {{ verification_results.violations|length }}
+{% for violation in verification_results.violations[:3] %}
+- {{ violation.type }}: {{ violation.reason }}
+{% endfor %}
+{% if verification_results.violations|length > 3 %}
+... and {{ verification_results.violations|length - 3 }} more
+{% endif %}
+{% endif %}
+
+{% if verification_results.verified_claims %}
+**Verified Claims**: {{ verification_results.verified_claims|length }}
+{% endif %}
+
+{% endif %}
+
+{% if context %}
+=== DEPENDENCY CONTEXT ===
+
+This answer builds upon the following confirmed answers from previous requirements:
+{% for dep_id, dep_answer in context.items() %}
+
+**{{ dep_id }}**: {{ dep_answer.requirement_title|default("") }}
+{{ dep_answer.answer[:200]|default("") }}...
+{% endfor %}
+{% endif %}
+
+=== YOUR TASK ===
+
+Evaluate the **QUALITY** of this answer using domain-agnostic criteria.
+
+Focus on THREE dimensions:
+
+**1. LOGICAL CONSISTENCY (40%)**
+
+Evaluate:
+- Does the reasoning flow logically from evidence to conclusions?
+- Are all claims supported by the data/evidence presented?
+- Are there any internal contradictions or logical gaps?
+- Does the answer properly distinguish between:
+  * **Observations**: Direct facts from data (e.g., "Tool X produced value Y")
+  * **Inferences**: Conclusions drawn from observations (e.g., "This suggests Z")
+
+Avoid:
+- DO NOT check tool-specific thresholds (verification already did that)
+- DO NOT penalize for missing tools (coverage already checked)
+- Focus ONLY on the logic: evidence → reasoning → conclusion
+
+Red flags:
+- Claims that don't follow from evidence
+- Contradicting oneself
+- Confusing observation with speculation
+
+**2. CLARITY (30%)**
+
+Evaluate:
+- Is the answer clearly structured and easy to understand?
+- Are technical terms used appropriately and explained when necessary?
+- Can an expert in the field understand what was done and why?
+- Is the presentation organized logically?
+
+Avoid:
+- DO NOT penalize for using domain-specific terminology (that's appropriate)
+- DO NOT require excessive detail for straightforward cases
+
+Red flags:
+- Vague or ambiguous statements
+- Unclear what was actually done
+- Missing key information needed to understand the answer
+
+**3. ACTIONABILITY (30%)**
+
+Evaluate:
+- Does the answer provide concrete, usable deliverables?
+- Are next steps clear (if applicable)?
+- Is uncertainty communicated appropriately?
+- Can someone act on this information?
+
+Avoid:
+- DO NOT require next steps if the requirement is complete
+- DO NOT penalize for appropriate expressions of uncertainty
+
+Red flags:
+- Vague recommendations with no specifics
+- Missing critical deliverables
+- Over-confident claims without acknowledging limitations
+
+=== CRITICAL INSTRUCTIONS ===
+
+**DO NOT**:
+- Apply tool-specific threshold checks (e.g., "E-value should be < 1e-5")
+  → Verification already did this objectively
+- Penalize for tool selection (that's not your job)
+- Check data accuracy (verification already confirmed it)
+
+**DO**:
+- Evaluate the logic and flow of reasoning
+- Assess clarity and communication quality
+- Check if deliverables are concrete and usable
+- Consider how well the answer addresses the requirement
+
+Think of it this way:
+- Verification checked if the FACTS are correct
+- You check if the ANSWER is GOOD (well-reasoned, clear, useful)
+
+=== OUTPUT FORMAT ===
+
+Respond with valid JSON ONLY (no markdown, no extra text):
+
+```json
+{
+  "quality_score": <float 0.0-1.0>,
+
+  "dimensions": {
+    "logical_consistency": {
+      "score": <float 0.0-1.0>,
+      "feedback": "<2-3 sentences explaining the score>"
+    },
+    "clarity": {
+      "score": <float 0.0-1.0>,
+      "feedback": "<2-3 sentences explaining the score>"
+    },
+    "actionability": {
+      "score": <float 0.0-1.0>,
+      "feedback": "<2-3 sentences explaining the score>"
+    }
+  },
+
+  "overall_feedback": "<2-3 sentences summarizing the answer's quality>",
+
+  "strengths": [
+    "<specific strength 1>",
+    "<specific strength 2>"
+  ],
+
+  "weaknesses": [
+    "<specific weakness 1>",
+    "<specific weakness 2>"
+  ]
+}
+```
+
+**Score Calculation**:
+```
+quality_score = (logical_consistency * 0.40) +
+                (clarity * 0.30) +
+                (actionability * 0.30)
+```
+
+=== SCORING GUIDELINES ===
+
+**Excellent (0.8-1.0)**:
+- Clear evidence → reasoning → conclusion flow
+- Well-organized and easy to understand
+- Concrete, actionable deliverables
+- Appropriate acknowledgment of uncertainty
+
+**Good (0.6-0.8)**:
+- Mostly logical with minor gaps
+- Generally clear with some ambiguity
+- Deliverables present but could be more specific
+- Some uncertainty communication
+
+**Fair (0.4-0.6)**:
+- Some logical issues or unclear reasoning
+- Harder to follow or understand
+- Vague deliverables or missing key elements
+- Poor uncertainty communication
+
+**Poor (0.0-0.4)**:
+- Major logical gaps or contradictions
+- Very unclear or disorganized
+- Missing critical deliverables
+- Unjustified confidence or missing uncertainty
+
+=== EXAMPLES ===
+
+**Example of GOOD logical consistency**:
+"Data shows metric X = 95 (high value). Previous studies indicate that values > 90 correlate with property Y. Therefore, this result suggests property Y is likely present, though experimental validation is recommended."
+→ Clear chain: data → literature → conclusion with appropriate hedging
+
+**Example of POOR logical consistency**:
+"Metric X = 95. This means it's definitely important."
+→ Unjustified leap from data to conclusion
+
+**Example of GOOD clarity**:
+"Analysis identified 3 candidate sites (residues 45-47, 67-69, 89-92) based on conservation scores > 0.8. Site 45-47 shows highest score (0.95) and structural accessibility, making it the primary target for further investigation."
+→ Specific, organized, clear
+
+**Example of POOR clarity**:
+"Some sites were found that might be interesting."
+→ Vague, no specifics
+
+**Example of GOOD actionability**:
+"Next steps: (1) Validate site 45-47 through mutagenesis, (2) Perform docking simulations with known ligands, (3) If binding confirmed, proceed to experimental assay."
+→ Concrete steps
+
+**Example of POOR actionability**:
+"Further work is needed."
+→ No specifics
+
+Now evaluate the answer above.

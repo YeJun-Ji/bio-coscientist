@@ -552,7 +552,10 @@ class ContextMemory:
                     "novelty_score": answer.novelty_score,
                     "confidence": answer.confidence,
                     "wins": answer.wins,
-                    "losses": answer.losses
+                    "losses": answer.losses,
+                    # v3.0: Absolute evaluation lens scores (from AbsoluteEvaluationAgent)
+                    "lens_scores": metadata.get("lens_scores", {}),
+                    "lens_feedback": metadata.get("lens_feedback", {})
                 },
 
                 # === EVOLUTION TRACKING ===

@@ -14,6 +14,8 @@ INPUT VARIABLES:
 
 You are an expert biomedical research analyst specializing in entity extraction and research planning.
 
+**IMPORTANT: ALL output MUST be in English.**
+
 Your task is to analyze a research requirement and extract:
 1. **Primary Entities** - biological/chemical entities mentioned in the requirement
 2. **Data Requirements** - what data sources are needed
@@ -88,6 +90,51 @@ Identify entities in the requirement description and context. Support these type
 - Prioritize the type most relevant to the requirement
 - Extract both broad entities (TNFR1) and specific regions (CRD2-CRD3)
 - Use context deliverables to identify refined entities
+
+================================================================================
+TOOL SELECTION REFERENCE
+================================================================================
+
+Use this reference to generate `tool_guidance` based on entity types and analysis needs:
+
+## Data Collection Tools (by entity type)
+
+| Entity Type | Primary Tools | Use When |
+|-------------|---------------|----------|
+| **protein** | uniprot.get_protein_info, rcsbpdb.download_pdb | Need sequence, structure, annotations |
+| **gene** | ncbi.get_gene_info, kegg.get_gene_info | Need gene details, expression, orthologs |
+| **pathway** | kegg.get_pathway_info, gprofiler.enrichment_analysis | Need pathway components, enrichment |
+| **compound** | kegg.get_compound_info, chembl.get_compound_activities | Need drug data, bioactivities |
+| **disease** | kegg.get_disease_info, opentargets.get_disease_associations | Need disease-gene/pathway links |
+| **domain** | interpro.analyze_domains, interpro.get_domain_architecture | Need domain structure, boundaries |
+| **interaction** | stringdb.get_protein_network, stringdb.get_interaction_partners | Need PPI data, interactors |
+
+## Analysis Tools (by analysis need)
+
+| Analysis Need | Primary Tools | Secondary Tools |
+|---------------|---------------|-----------------|
+| **network_analysis** | networkx.build_network, networkx.find_hub_proteins | stringdb.get_enrichment_analysis |
+| **pathway_enrichment** | gprofiler.enrichment_analysis, kegg.get_pathway_info | stringdb.get_enrichment_analysis |
+| **structure_prediction** | esmfold.predict_structure, colabfold.predict_structure | rcsbpdb.download_pdb (if known) |
+| **binder_design** | rfdiffusion.design_binder, proteinmpnn.design_sequence | colabfold.predict_binder_complex |
+| **docking** | vina.dock_ligand, rosetta.dock_proteins | rcsbpdb.get_binding_sites |
+| **immunogenicity** | iedb.scan_protein, iedb.predict_mhc_binding | N/A |
+| **druggability** | opentargets.assess_druggability, chembl.get_bioactivities | opentargets.search_target_drugs |
+| **homology_search** | blast.find_similar_proteins, foldseek.search_structure | msa.align_sequences |
+| **conservation** | msa.align_sequences, msa.calculate_conservation | blast.find_similar_proteins |
+
+## Tool Selection Guidelines
+
+1. **Match entity type** → Select collection tools from the entity type table
+2. **Match analysis need** → Select analysis tools from the analysis need table
+3. **Consider data flow**:
+   - STRING data → can feed into NetworkX
+   - PDB structure → required for Rosetta/Vina docking
+   - Sequence → required for ESMFold/BLAST/MSA
+   - Binder backbone (RFdiffusion) → needs ProteinMPNN for sequence design
+4. **GPU requirements**:
+   - ColabFold (24GB+), RFdiffusion (16GB+), ProteinMPNN (8GB+) require GPU
+   - Consider ESMFold as CPU alternative for structure prediction
 
 ================================================================================
 EXTRACTION GUIDELINES
@@ -212,6 +259,23 @@ Return ONLY valid JSON in this exact format:
   "context_refinements": {
     "refinement_key": "refinement_value",
     "...": "..."
+  },
+  "tool_guidance": {
+    "collection_tools": [
+      {
+        "server": "server_name",
+        "tool": "tool_name",
+        "purpose": "Brief description of why this tool is needed",
+        "for_entity": "entity_name"
+      }
+    ],
+    "analysis_tools": [
+      {
+        "server": "server_name",
+        "tool": "tool_name",
+        "purpose": "Brief description of why this tool is needed"
+      }
+    ]
   }
 }
 ```
@@ -219,6 +283,10 @@ Return ONLY valid JSON in this exact format:
 ================================================================================
 EXAMPLE OUTPUTS
 ================================================================================
+
+**NOTE**: The examples below illustrate the OUTPUT FORMAT and STRUCTURE only.
+The specific entities (TNFR1, MAPK, ACE2, etc.) are just examples - apply the same
+pattern to whatever entities appear in YOUR actual requirement.
 
 **Example 1: Protein Design (with context)**
 
@@ -260,55 +328,80 @@ Output:
       "reason": "Need TNFR1 sequence to identify CRD2-CRD3 residues"
     }
   ],
-  "analysis_needs": ["binding_energy", "docking", "structure_prediction"],
+  "analysis_needs": ["binder_design", "structure_prediction", "docking"],
   "context_refinements": {
     "binding_site": "CRD2-CRD3",
     "critical_residues": ["R31", "K35"]
+  },
+  "tool_guidance": {
+    "collection_tools": [
+      {"server": "uniprot", "tool": "get_protein_info", "purpose": "Get TNFR1 sequence and annotations", "for_entity": "TNFR1"},
+      {"server": "rcsbpdb", "tool": "download_pdb", "purpose": "Get TNFR1 3D structure for binder design", "for_entity": "TNFR1"},
+      {"server": "interpro", "tool": "get_domain_architecture", "purpose": "Identify CRD2-CRD3 domain boundaries", "for_entity": "CRD2-CRD3"}
+    ],
+    "analysis_tools": [
+      {"server": "rfdiffusion", "tool": "design_binder", "purpose": "Generate binder backbone targeting CRD2-CRD3"},
+      {"server": "proteinmpnn", "tool": "design_sequence", "purpose": "Design sequence for binder backbone"},
+      {"server": "colabfold", "tool": "predict_binder_complex", "purpose": "Validate binder-target complex structure"}
+    ]
   }
 }
 ```
 
-**Example 2: Pathway Analysis**
+**Example 2: Pathway/Network Analysis (IL-11 Inhibitor Discovery)**
 
-Requirement: "Analyze MAPK signaling pathway dysregulation in cancer"
+Requirement: "Identify IL-11 pathway interactors and potential inhibitor targets"
 
 Output:
 ```json
 {
   "primary_entities": [
     {
-      "type": "pathway",
-      "name": "MAPK signaling",
-      "description": "Signaling pathway to analyze for dysregulation",
-      "identifiers": {"kegg": "hsa04010"},
+      "type": "protein",
+      "name": "IL-11",
+      "description": "Target cytokine for inhibitor discovery",
+      "identifiers": {"uniprot": "P20809"},
       "source": "requirement",
       "priority": "required"
     },
     {
-      "type": "disease",
-      "name": "cancer",
-      "description": "Disease context for pathway dysregulation",
-      "identifiers": {},
+      "type": "pathway",
+      "name": "IL-11/JAK-STAT signaling",
+      "description": "Signaling pathway to analyze for drug targets",
+      "identifiers": {"kegg": "hsa04630"},
       "source": "requirement",
       "priority": "required"
     }
   ],
   "data_requirements": [
     {
+      "type": "interaction",
+      "source": "stringdb",
+      "priority": "required",
+      "reason": "Need IL-11 protein-protein interaction network"
+    },
+    {
       "type": "pathway",
       "source": "kegg",
       "priority": "required",
-      "reason": "Need MAPK pathway structure and protein components"
-    },
-    {
-      "type": "literature",
-      "source": "pubmed",
-      "priority": "recommended",
-      "reason": "Need recent publications on MAPK dysregulation in cancer"
+      "reason": "Need JAK-STAT pathway components and hierarchy"
     }
   ],
-  "analysis_needs": ["pathway_enrichment", "visualization"],
-  "context_refinements": {}
+  "analysis_needs": ["network_analysis", "pathway_enrichment", "druggability"],
+  "context_refinements": {},
+  "tool_guidance": {
+    "collection_tools": [
+      {"server": "stringdb", "tool": "get_protein_network", "purpose": "Get IL-11 interaction network", "for_entity": "IL-11"},
+      {"server": "stringdb", "tool": "get_interaction_partners", "purpose": "Identify IL-11 interactors", "for_entity": "IL-11"},
+      {"server": "kegg", "tool": "get_pathway_info", "purpose": "Get JAK-STAT pathway details", "for_entity": "IL-11/JAK-STAT signaling"}
+    ],
+    "analysis_tools": [
+      {"server": "networkx", "tool": "build_network", "purpose": "Build PPI network from STRING data"},
+      {"server": "networkx", "tool": "find_hub_proteins", "purpose": "Identify key hub proteins as drug targets"},
+      {"server": "gprofiler", "tool": "enrichment_analysis", "purpose": "Pathway enrichment of network components"},
+      {"server": "opentargets", "tool": "assess_druggability", "purpose": "Evaluate druggability of hub proteins"}
+    ]
+  }
 }
 ```
 
@@ -354,13 +447,25 @@ Output:
     },
     {
       "type": "compound",
-      "source": "kegg",
-      "priority": "recommended",
-      "reason": "KEGG compound library for screening candidates"
+      "source": "chembl",
+      "priority": "required",
+      "reason": "ChEMBL compounds with known bioactivity for screening"
     }
   ],
-  "analysis_needs": ["docking", "binding_energy"],
-  "context_refinements": {}
+  "analysis_needs": ["docking", "binding_affinity", "druggability"],
+  "context_refinements": {},
+  "tool_guidance": {
+    "collection_tools": [
+      {"server": "rcsbpdb", "tool": "download_pdb", "purpose": "Get ACE2-RBD complex structure", "for_entity": "ACE2"},
+      {"server": "rcsbpdb", "tool": "get_binding_sites", "purpose": "Identify binding site for docking", "for_entity": "ACE2"},
+      {"server": "chembl", "tool": "get_target_bioactivities", "purpose": "Get known active compounds", "for_entity": "ACE2"}
+    ],
+    "analysis_tools": [
+      {"server": "vina", "tool": "dock_ligand", "purpose": "Dock compounds to ACE2-RBD interface"},
+      {"server": "vina", "tool": "calculate_binding_affinity", "purpose": "Rank compounds by affinity"},
+      {"server": "opentargets", "tool": "search_target_drugs", "purpose": "Find existing drugs targeting ACE2"}
+    ]
+  }
 }
 ```
 
