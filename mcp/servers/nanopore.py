@@ -14,6 +14,8 @@ import subprocess
 from typing import List, Dict, Any
 import logging
 
+from ..server_templates import install_server_template
+
 logger = logging.getLogger(__name__)
 
 
@@ -61,34 +63,32 @@ class NanoporeServer:
 
     @staticmethod
     def install():
-        """Install Nanopore MCP server"""
+        """Install Nanopore MCP server from template"""
         install_path = NanoporeServer.get_install_path()
 
         if NanoporeServer.is_installed():
             logger.info(f"Nanopore server already installed at {install_path}")
             return
 
-        logger.info(f"Installing Nanopore server at {install_path}")
+        logger.info(f"Installing Nanopore server to {install_path}")
 
         # Create directory if needed
         os.makedirs(install_path, exist_ok=True)
 
-        # Create requirements.txt
-        requirements_path = os.path.join(install_path, "requirements.txt")
-        if not os.path.exists(requirements_path):
-            with open(requirements_path, "w") as f:
-                f.write("pysam>=0.21.0\n")
-                f.write("numpy>=1.21.0\n")
-                f.write("scipy>=1.7.0\n")
-                f.write("mcp>=0.1.0\n")
+        # Install server.py from template
+        server_path = os.path.join(install_path, "server.py")
+        if not os.path.exists(server_path):
+            if not install_server_template("nanopore", install_path):
+                raise RuntimeError("Failed to install Nanopore server template")
+            logger.info("✅ Installed server.py from template")
 
-        # Check if venv exists, if not create it
+        # Create venv and install dependencies
         venv_path = os.path.join(install_path, ".venv")
+        venv_python = os.path.join(venv_path, "bin", "python")
+        uv_path = os.path.expanduser("~/.local/bin/uv")
+
         if not os.path.exists(venv_path):
             logger.info("Creating virtual environment...")
-            uv_path = os.path.expanduser("~/.local/bin/uv")
-
-            # Create venv
             subprocess.run(
                 [uv_path, "venv", "--python", "3.10", ".venv"],
                 cwd=install_path,
@@ -96,16 +96,14 @@ class NanoporeServer:
                 capture_output=True
             )
 
-            # Install requirements
-            uv_path = os.path.expanduser("~/.local/bin/uv")
-        venv_python = os.path.join(venv_path, "bin", "python")
+        # Install dependencies using uv pip
         logger.info("Installing dependencies (pysam, numpy, scipy)...")
         subprocess.run(
-            [uv_path, "pip", "install", "--python", venv_python, "-r", requirements_path],
-                cwd=install_path,
-                check=True,
-                capture_output=True
-            )
+            [uv_path, "pip", "install", "--python", venv_python, "mcp", "pysam", "numpy", "scipy"],
+            cwd=install_path,
+            check=True,
+            capture_output=True
+        )
 
         logger.info("✅ Nanopore server setup complete")
 

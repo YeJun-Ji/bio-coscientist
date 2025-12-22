@@ -10,7 +10,7 @@ Architecture:
 - Answer Generation: Load only analysis results (Chain 1 data not needed)
 
 File Structure:
-    logs/<experiment>/data/requirements/
+    logs/<experiment>/data/
         req_1/
             collection/
                 sources.json      # Full Chain 1 data (NO truncation)
@@ -46,7 +46,7 @@ class DataFileManager:
             experiment_dir: Path to logs/<experiment>_<timestamp>/ directory
         """
         self.experiment_dir = experiment_dir
-        self.data_dir = os.path.join(experiment_dir, "data", "requirements")
+        self.data_dir = os.path.join(experiment_dir, "data")  # Simplified: /data/req_X instead of /data/requirements/req_X
 
         # Create data directory if it doesn't exist
         os.makedirs(self.data_dir, exist_ok=True)
@@ -274,3 +274,49 @@ class DataFileManager:
         if os.path.exists(file_path):
             return os.path.getsize(file_path)
         return 0
+
+    def save_iteration_result(
+        self,
+        requirement_id: str,
+        iteration: int,
+        result_key: str,
+        result: Any
+    ) -> str:
+        """
+        Save individual tool result from ReAct iteration to file.
+
+        This prevents data loss when truncating results for LLM conversation.
+        Full results are saved to: data/req_X/analysis/iter_N/result_key.json
+
+        Args:
+            requirement_id: Requirement ID (e.g., "1", "2")
+            iteration: ReAct iteration number (1, 2, 3, ...)
+            result_key: Tool result key (e.g., "run_pandas_code_tool_1")
+            result: Full tool result (dict or any serializable object)
+
+        Returns:
+            File path where result was saved
+        """
+        req_dir = os.path.join(self.data_dir, f"req_{requirement_id}")
+        iteration_dir = os.path.join(req_dir, "analysis", f"iter_{iteration}")
+        os.makedirs(iteration_dir, exist_ok=True)
+
+        # Clean result key for filename (replace special chars)
+        safe_key = result_key.replace("/", "_").replace("\\", "_")
+        result_file = os.path.join(iteration_dir, f"{safe_key}.json")
+
+        try:
+            with open(result_file, 'w', encoding='utf-8') as f:
+                json.dump(
+                    result,
+                    f,
+                    indent=2,
+                    ensure_ascii=False,
+                    default=str
+                )
+            logger.debug(f"Saved iteration result: {result_file}")
+        except Exception as e:
+            logger.error(f"Failed to save iteration result: {e}")
+            raise
+
+        return result_file

@@ -119,6 +119,10 @@ class MCPClient:
         if not self.process or not self.process.stdin:
             raise RuntimeError("MCP server not started")
 
+        # Track if we need to restart server (to avoid deadlock - restart outside lock)
+        needs_restart = False
+        restart_reason = ""
+
         # Use lock to prevent concurrent access to stdin/stdout
         # This ensures only one request is processed at a time per MCP client
         async with self._request_lock:
@@ -127,30 +131,39 @@ class MCPClient:
             self.process.stdin.write(request_str.encode())
             await self.process.stdin.drain()
 
-            # Read response with timeout
-            try:
-                response_line = await asyncio.wait_for(
-                    self.process.stdout.readline(),
-                    timeout=30.0
-                )
-                if not response_line:
-                    raise RuntimeError("MCP server closed connection")
-
+            # Read response (no timeout - wait for completion)
+            response_line = await self.process.stdout.readline()
+            if not response_line:
+                # Server closed - mark for restart OUTSIDE lock to avoid deadlock
+                self.logger.warning(f"MCP server closed connection, will restart...")
+                needs_restart = True
+                restart_reason = "server closed connection"
+            else:
                 # Decode and strip whitespace
                 response_str = response_line.decode().strip()
                 if not response_str:
-                    raise RuntimeError("MCP server returned empty response")
+                    self.logger.warning(f"MCP server returned empty response, will restart...")
+                    needs_restart = True
+                    restart_reason = "empty response"
+                else:
+                    try:
+                        response = json.loads(response_str)
+                    except json.JSONDecodeError as e:
+                        self.logger.error(f"Failed to parse MCP response: {response_str[:200]}...")
+                        needs_restart = True
+                        restart_reason = f"JSON parse error: {e}"
 
-                response = json.loads(response_str)
+        # Restart server OUTSIDE the lock to avoid deadlock
+        # (start() -> _initialize() -> _send_request() would deadlock if lock is held)
+        if needs_restart:
+            await self._restart_server()
+            raise RuntimeError(f"MCP server error ({restart_reason}) - restarted, please retry")
 
-                if "error" in response:
-                    error_msg = response['error'].get('message', str(response['error']))
-                    raise RuntimeError(f"MCP error: {error_msg}")
+        if "error" in response:
+            error_msg = response['error'].get('message', str(response['error']))
+            raise RuntimeError(f"MCP error: {error_msg}")
 
-                return response.get("result", {})
-
-            except asyncio.TimeoutError:
-                raise RuntimeError("MCP request timeout")
+        return response.get("result", {})
     
     async def list_tools(self) -> List[Dict[str, Any]]:
         """
@@ -211,3 +224,23 @@ class MCPClient:
                 self.process.kill()
                 await self.process.wait()
             self.logger.info(f"MCP server closed: {self.server_name}")
+
+    async def _restart_server(self):
+        """Restart the MCP server process after a failure"""
+        self.logger.info(f"Restarting MCP server: {self.server_name}")
+
+        # Close existing process if any
+        if self.process:
+            try:
+                self.process.kill()
+                await self.process.wait()
+            except Exception:
+                pass
+
+        # Restart the server
+        try:
+            await self.start()
+            self.logger.info(f"MCP server restarted successfully: {self.server_name}")
+        except Exception as e:
+            self.logger.error(f"Failed to restart MCP server: {e}")
+            raise

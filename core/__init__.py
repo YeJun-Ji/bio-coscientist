@@ -370,18 +370,54 @@ class ParsedProblem:
         """
         Returns requirements grouped by execution order (parallelizable groups).
         Uses topological sort based on depends_on.
+
+        IMPORTANT: Excludes parent/header requirements (like 'A', 'B') that serve
+        only as organizational containers. Only includes leaf requirements that
+        have actual work to be done.
         """
+        # Step 1: Identify parent requirements (those that have children)
+        parent_ids = set()
+        for req in self.requirements:
+            if req.parent_id:
+                parent_ids.add(req.parent_id)
+
+        # Step 2: Get leaf requirements only (those that are NOT parents)
+        leaf_requirements = [r for r in self.requirements if r.requirement_id not in parent_ids]
+
+        # Step 3: Build dependency map with expanded parent dependencies
+        # If a leaf depends on a parent 'A', expand to depend on all children of 'A'
+        def expand_dependencies(dep_list: List[str]) -> List[str]:
+            expanded = []
+            for dep in dep_list:
+                if dep in parent_ids:
+                    # This is a parent requirement - expand to its children
+                    children = [r.requirement_id for r in self.requirements if r.parent_id == dep]
+                    expanded.extend(children)
+                else:
+                    # Regular dependency - keep as-is
+                    expanded.append(dep)
+            return expanded
+
+        # Step 4: Topological sort on leaf requirements only
         executed = set()
         result = []
-        remaining = {r.requirement_id: r for r in self.requirements}
+        remaining = {}
+
+        for req in leaf_requirements:
+            expanded_deps = expand_dependencies(req.depends_on)
+            # Filter out any remaining parent dependencies
+            expanded_deps = [d for d in expanded_deps if d not in parent_ids]
+            remaining[req.requirement_id] = expanded_deps
 
         while remaining:
             ready = []
-            for req_id, req in remaining.items():
-                if all(dep in executed for dep in req.depends_on):
+            for req_id, deps in remaining.items():
+                if all(dep in executed for dep in deps):
                     ready.append(req_id)
 
             if not ready:
+                # Circular dependency or all remaining have unmet deps
+                # Just pick the remaining ones (fallback)
                 ready = list(remaining.keys())
 
             result.append(ready)
@@ -390,6 +426,25 @@ class ParsedProblem:
                 del remaining[req_id]
 
         return result
+
+    def get_leaf_requirements(self) -> List["Requirement"]:
+        """
+        Returns only leaf requirements (those that are not parents of other requirements).
+        Parent/header requirements like 'A', 'B' are excluded.
+        """
+        parent_ids = set()
+        for req in self.requirements:
+            if req.parent_id:
+                parent_ids.add(req.parent_id)
+
+        return [r for r in self.requirements if r.requirement_id not in parent_ids]
+
+    def is_parent_requirement(self, requirement_id: str) -> bool:
+        """Check if a requirement is a parent/header requirement."""
+        for req in self.requirements:
+            if req.parent_id == requirement_id:
+                return True
+        return False
 
 
 @dataclass

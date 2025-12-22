@@ -13,6 +13,8 @@ import subprocess
 from typing import List, Dict, Any
 import logging
 
+from ..server_templates import install_server_template
+
 logger = logging.getLogger(__name__)
 
 
@@ -51,31 +53,32 @@ class VinaServer:
 
     @staticmethod
     def install():
-        """Install Vina MCP server"""
+        """Install Vina MCP server from template"""
         install_path = VinaServer.get_install_path()
 
         if VinaServer.is_installed():
             logger.info(f"Vina server already installed at {install_path}")
             return
 
-        logger.info(f"Installing Vina server at {install_path}")
+        logger.info(f"Installing Vina server to {install_path}")
 
+        # Create directory if needed
         os.makedirs(install_path, exist_ok=True)
 
-        requirements_path = os.path.join(install_path, "requirements.txt")
-        if not os.path.exists(requirements_path):
-            with open(requirements_path, "w") as f:
-                f.write("vina>=1.2.3\n")
-                f.write("meeko>=0.5.0\n")
-                f.write("rdkit>=2023.3.1\n")
-                f.write("biopython>=1.81\n")
-                f.write("mcp>=0.1.0\n")
+        # Install server.py from template
+        server_path = os.path.join(install_path, "server.py")
+        if not os.path.exists(server_path):
+            if not install_server_template("vina", install_path):
+                raise RuntimeError("Failed to install Vina server template")
+            logger.info("✅ Installed server.py from template")
 
+        # Create venv and install dependencies
         venv_path = os.path.join(install_path, ".venv")
+        venv_python = os.path.join(venv_path, "bin", "python")
+        uv_path = os.path.expanduser("~/.local/bin/uv")
+
         if not os.path.exists(venv_path):
             logger.info("Creating virtual environment...")
-            uv_path = os.path.expanduser("~/.local/bin/uv")
-
             subprocess.run(
                 [uv_path, "venv", "--python", "3.10", ".venv"],
                 cwd=install_path,
@@ -83,15 +86,14 @@ class VinaServer:
                 capture_output=True
             )
 
-            uv_path = os.path.expanduser("~/.local/bin/uv")
-        venv_python = os.path.join(venv_path, "bin", "python")
+        # Install dependencies (note: vina/meeko require Boost C++ library)
         logger.info("Installing dependencies...")
         subprocess.run(
-            [uv_path, "pip", "install", "--python", venv_python, "-r", requirements_path],
-                cwd=install_path,
-                check=True,
-                capture_output=True
-            )
+            [uv_path, "pip", "install", "--python", venv_python, "mcp", "requests", "biopython"],
+            cwd=install_path,
+            check=True,
+            capture_output=True
+        )
 
         logger.info("✅ Vina server setup complete")
 

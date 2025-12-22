@@ -478,6 +478,30 @@ class ContextMemory:
             "metadata": getattr(answer, "metadata", {})
         }
 
+    def _summarize_tools(self, tools: list) -> list:
+        """
+        Summarize tool usage for RA config (remove full code to reduce file size).
+
+        Args:
+            tools: List of tool execution records
+
+        Returns:
+            Summarized tool list with only essential info
+        """
+        summarized = []
+        for tool in tools:
+            summary = {
+                "tool_name": tool.get("tool_name", ""),
+                "duration_seconds": tool.get("duration_seconds", 0),
+                "status": tool.get("status", ""),
+                "react_iteration": tool.get("react_iteration", 0)
+            }
+            # Include error message if failed
+            if tool.get("status") == "failed" and tool.get("error"):
+                summary["error"] = tool.get("error", "")[:200]  # Truncate error
+            summarized.append(summary)
+        return summarized
+
     def _export_ra_config(self, answer: RequirementAnswer) -> None:
         """
         Export RequirementAnswer config to RAs folder.
@@ -516,25 +540,33 @@ class ContextMemory:
                 "rationale": answer.rationale,
                 "deliverables": answer.deliverables,
 
-                # === ENTITY ANALYSIS (NEW!) ===
-                "entity_analysis": {
-                    "primary_entities": entity_analysis.get("primary_entities", []),
-                    "data_requirements": entity_analysis.get("data_requirements", []),
-                    "analysis_needs": entity_analysis.get("analysis_needs", []),
-                    "context_refinements": entity_analysis.get("context_refinements", {})
+                # === REQUIREMENT ANALYSIS (NEW structure - v3.2) ===
+                "requirement_analysis": {
+                    "requirement_type": entity_analysis.get("requirement_type", "unknown"),
+                    "chain1_strategy": {
+                        "skip_collection": entity_analysis.get("chain1_strategy", {}).get("skip_collection", False),
+                        "rationale": entity_analysis.get("chain1_strategy", {}).get("rationale", ""),
+                        "tools_count": len(entity_analysis.get("chain1_strategy", {}).get("tools", []))
+                    },
+                    "chain2_strategy": {
+                        "analysis_type": entity_analysis.get("chain2_strategy", {}).get("analysis_type", ""),
+                        "tools_count": len(entity_analysis.get("chain2_strategy", {}).get("tools", []))
+                    },
+                    "entity_names": entity_analysis.get("entity_names", []),
+                    "input_files": entity_analysis.get("input_files", [])
                 },
 
                 # === DATA COLLECTION ===
                 "data_collection": {
                     "servers_used": data_collection.get("servers_used", answer.data_sources),
-                    "tools": data_collection.get("tools", []),  # Collection tools with full details
+                    "tools_summary": self._summarize_tools(data_collection.get("tools", [])),
                     "sources_file": data_collection.get("sources_file")  # File path reference
                 },
 
                 # === DATA ANALYSIS ===
                 "data_analysis": {
                     "analyses_performed": data_analysis.get("analyses_performed", []),
-                    "tools": data_analysis.get("tools", []),  # Analysis tools with full details
+                    "tools_summary": self._summarize_tools(data_analysis.get("tools", [])),
                     "results_file": data_analysis.get("results_file")  # File path reference
                 },
 

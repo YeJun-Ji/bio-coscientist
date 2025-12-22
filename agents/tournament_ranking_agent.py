@@ -1,17 +1,16 @@
 """
-Tournament Ranking Agent - v5.0 Simplified Evaluation Pipeline
+Tournament Ranking Agent - v6.0 Win-Count Based Pipeline
 
 This agent ranks RequirementAnswers using tournament-style pairwise comparison.
+NO ELO rating - uses pure win count for ranking.
 
 Tournament Structure:
 - 3 answers: Round-robin (A vs B, B vs C, A vs C) → Rank by win count
 - 2 answers: Single matchup (A vs B)
 - 1 answer: Auto-select (no tournament)
 
-Comparison Criteria (via LLM):
-- Goal Contribution (40%): Which helps next requirement more?
-- Data Confidence (30%): Which uses more authoritative sources?
-- Feasibility & Cost (30%): Which is cheaper/faster to validate?
+Tie-breaking:
+- When answers have equal wins, LLM determines which is more novel/creative
 """
 
 import logging
@@ -33,10 +32,10 @@ class TournamentRankingAgent(BaseAgent):
     """
     Ranks RequirementAnswers using LLM-based tournament comparison.
 
-    Architecture Note:
-    - Replaces score-based ranking with pairwise LLM comparison
-    - Uses win count for final ranking
-    - Updates ELO ratings for backward compatibility
+    Architecture Note (v6.0):
+    - Uses pure win count for ranking (NO ELO)
+    - Tie-breaking via LLM novelty evaluation
+    - Runs in parallel with Reflection Agent
     """
 
     def __init__(
@@ -55,7 +54,7 @@ class TournamentRankingAgent(BaseAgent):
             **kwargs
         )
         self.prompt_manager = prompt_manager or PromptManager()
-        self.log("TournamentRankingAgent initialized (v5.0 - tournament-based)")
+        self.log("TournamentRankingAgent initialized (v6.0 - win-count based, novelty tiebreaker)")
 
     # ========================================================================
     # Main Entry Point (Required by BaseAgent)
@@ -96,7 +95,7 @@ class TournamentRankingAgent(BaseAgent):
             1. Determine bracket based on number of answers
             2. For each matchup: LLM pairwise comparison
             3. Aggregate results into final ranking
-            4. Update ELO ratings for backward compatibility
+            4. Break ties using novelty evaluation
         """
         num_answers = len(answers)
         self.log(f"Starting tournament with {num_answers} answers")
@@ -109,7 +108,6 @@ class TournamentRankingAgent(BaseAgent):
             # Auto-select single answer
             self.log("Single answer - auto-selecting")
             answers[0].tournament_rank = 1
-            answers[0].elo_rating = 1200
             answers[0].tournament_matchups = []
             return {
                 "ranked_answers": answers,
@@ -121,15 +119,17 @@ class TournamentRankingAgent(BaseAgent):
             self.log("Two answers - single matchup")
             matchup = await self._compare_pair(answers[0], answers[1], requirement)
             winner_id = matchup.winner_id
-            winner = next(a for a in answers if a.id == winner_id)
-            loser = next(a for a in answers if a.id != winner_id)
+            winner = next(a for a in answers if self._get_answer_id(a) == winner_id)
+            loser = next(a for a in answers if self._get_answer_id(a) != winner_id)
 
             winner.tournament_rank = 1
-            winner.elo_rating = 1250
+            winner.wins = 1
+            winner.losses = 0
             winner.tournament_matchups = [matchup.to_dict()]
 
             loser.tournament_rank = 2
-            loser.elo_rating = 1150
+            loser.wins = 0
+            loser.losses = 1
             loser.tournament_matchups = [matchup.to_dict()]
 
             return {
@@ -143,37 +143,48 @@ class TournamentRankingAgent(BaseAgent):
         # 3+ answers: Round-robin tournament
         self.log(f"{num_answers} answers - running round-robin tournament")
         matchups = []
-        win_counts = {a.id: 0 for a in answers}
+        win_counts = {self._get_answer_id(a): 0 for a in answers}
+        loss_counts = {self._get_answer_id(a): 0 for a in answers}
 
         # All pairwise comparisons
         for i in range(len(answers)):
             for j in range(i + 1, len(answers)):
                 matchup = await self._compare_pair(answers[i], answers[j], requirement)
                 matchups.append(matchup)
-                win_counts[matchup.winner_id] += 1
+
+                winner_id = matchup.winner_id
+                loser_id = matchup.answer_a_id if matchup.answer_b_id == winner_id else matchup.answer_b_id
+
+                win_counts[winner_id] += 1
+                loss_counts[loser_id] += 1
+
                 self.log(
-                    f"  Matchup: {answers[i].id[:8]} vs {answers[j].id[:8]} "
-                    f"→ Winner: {matchup.winner_id[:8]} (margin: {matchup.margin})"
+                    f"  Matchup: {self._get_answer_id(answers[i])[:8]} vs {self._get_answer_id(answers[j])[:8]} "
+                    f"→ Winner: {winner_id[:8]} (margin: {matchup.margin})"
                 )
 
         # Sort by win count
-        ranked_answers = sorted(answers, key=lambda a: win_counts[a.id], reverse=True)
+        ranked_answers = sorted(answers, key=lambda a: win_counts[self._get_answer_id(a)], reverse=True)
 
-        # Handle ties
-        ranked_answers = self._break_ties(ranked_answers, matchups, win_counts)
+        # Handle ties with novelty evaluation
+        ranked_answers = await self._break_ties_with_novelty(
+            ranked_answers, matchups, win_counts, requirement
+        )
 
-        # Update ELO ratings and tournament metadata
+        # Update tournament metadata
         for rank, answer in enumerate(ranked_answers, 1):
+            answer_id = self._get_answer_id(answer)
             answer.tournament_rank = rank
-            answer.elo_rating = 1200 + (len(ranked_answers) - rank) * 50
+            answer.wins = win_counts[answer_id]
+            answer.losses = loss_counts[answer_id]
             answer.tournament_matchups = [
                 m.to_dict() for m in matchups
-                if m.answer_a_id == answer.id or m.answer_b_id == answer.id
+                if m.answer_a_id == answer_id or m.answer_b_id == answer_id
             ]
 
         self.log(
             f"Tournament complete. Rankings: "
-            f"{[(a.id[:8], win_counts[a.id]) for a in ranked_answers]}"
+            f"{[(self._get_answer_id(a)[:8], win_counts[self._get_answer_id(a)]) for a in ranked_answers]}"
         )
 
         return {
@@ -200,26 +211,14 @@ class TournamentRankingAgent(BaseAgent):
             requirement: Requirement specification
 
         Returns:
-            Matchup with winner_id, reasoning, criteria_scores, margin
+            Matchup with winner_id, reasoning, margin
         """
         # Build prompt
         prompt = self.prompt_manager.get_prompt(
             "ranking/tournament_comparison",
             requirement=requirement,
-            answer_a={
-                "id": answer_a.id,
-                "answer": answer_a.answer,
-                "rationale": answer_a.rationale,
-                "deliverables": answer_a.deliverables,
-                "reflection_score": answer_a.quality_score  # From Reflection Agent
-            },
-            answer_b={
-                "id": answer_b.id,
-                "answer": answer_b.answer,
-                "rationale": answer_b.rationale,
-                "deliverables": answer_b.deliverables,
-                "reflection_score": answer_b.quality_score
-            }
+            answer_a=self._answer_to_dict(answer_a),
+            answer_b=self._answer_to_dict(answer_b)
         )
 
         # Call LLM
@@ -230,73 +229,164 @@ class TournamentRankingAgent(BaseAgent):
                 purpose="tournament_pairwise_comparison"
             )
 
+            answer_a_id = self._get_answer_id(answer_a)
+            answer_b_id = self._get_answer_id(answer_b)
+            winner_id_from_llm = response.get("winner_id", "")
+
+            # Validate winner_id - must be one of the two answer IDs
+            if winner_id_from_llm == answer_a_id:
+                winner_id = answer_a_id
+            elif winner_id_from_llm == answer_b_id:
+                winner_id = answer_b_id
+            elif answer_a_id in winner_id_from_llm or winner_id_from_llm in answer_a_id:
+                # Partial match - LLM might have truncated the ID
+                winner_id = answer_a_id
+                self.log(f"  Warning: LLM returned partial match '{winner_id_from_llm}' → mapped to '{answer_a_id}'")
+            elif answer_b_id in winner_id_from_llm or winner_id_from_llm in answer_b_id:
+                winner_id = answer_b_id
+                self.log(f"  Warning: LLM returned partial match '{winner_id_from_llm}' → mapped to '{answer_b_id}'")
+            else:
+                # Default to answer_a if LLM returned completely invalid ID
+                winner_id = answer_a_id
+                self.log(f"  Warning: Invalid winner_id '{winner_id_from_llm}' → defaulting to '{answer_a_id}'")
+
             return Matchup(
-                answer_a_id=answer_a.id,
-                answer_b_id=answer_b.id,
-                winner_id=response["winner_id"],
-                reasoning=response["reasoning"],
-                criteria_scores=response.get("criteria_scores", {}),
+                answer_a_id=answer_a_id,
+                answer_b_id=answer_b_id,
+                winner_id=winner_id,
+                reasoning=response.get("reasoning", "No reasoning provided"),
                 margin=response.get("margin", "close")
             )
 
         except Exception as e:
             self.log(f"ERROR in pairwise comparison: {e}", level="error")
-            # Fallback: Use reflection score
-            winner_id = answer_a.id if answer_a.quality_score > answer_b.quality_score else answer_b.id
+            # Fallback: Random selection (first answer)
             return Matchup(
-                answer_a_id=answer_a.id,
-                answer_b_id=answer_b.id,
-                winner_id=winner_id,
-                reasoning=f"LLM comparison failed, using reflection scores (A: {answer_a.quality_score:.2f}, B: {answer_b.quality_score:.2f})",
-                criteria_scores={},
-                margin="close"
+                answer_a_id=self._get_answer_id(answer_a),
+                answer_b_id=self._get_answer_id(answer_b),
+                winner_id=self._get_answer_id(answer_a),
+                reasoning=f"LLM comparison failed: {str(e)}. Defaulting to first answer.",
+                margin="very_close"
             )
 
-    def _break_ties(
+    async def _break_ties_with_novelty(
         self,
         ranked_answers: List[RequirementAnswer],
         matchups: List[Matchup],
-        win_counts: Dict[str, int]
+        win_counts: Dict[str, int],
+        requirement: Dict[str, Any]
     ) -> List[RequirementAnswer]:
         """
-        Break ties using margin of victory.
+        Break ties using LLM novelty evaluation.
+
+        When answers have equal wins, ask LLM which is more novel/creative.
 
         Args:
             ranked_answers: Answers sorted by win count
             matchups: All matchups
             win_counts: Win count per answer
+            requirement: Requirement specification
 
         Returns:
-            Re-sorted answers with ties broken
+            Re-sorted answers with ties broken by novelty
         """
         # Group by win count
         win_count_groups = {}
         for answer in ranked_answers:
-            count = win_counts[answer.id]
+            count = win_counts[self._get_answer_id(answer)]
             if count not in win_count_groups:
                 win_count_groups[count] = []
             win_count_groups[count].append(answer)
 
-        # For each group with ties, use margin of victory
+        # For each group with ties, use novelty evaluation
         result = []
         for count in sorted(win_count_groups.keys(), reverse=True):
             group = win_count_groups[count]
             if len(group) == 1:
                 result.extend(group)
             else:
-                # Calculate total margin score
-                margin_scores = {"clear": 2, "close": 1, "very_close": 0.5}
-                margins = {}
-                for answer in group:
-                    total_margin = 0
-                    for matchup in matchups:
-                        if matchup.winner_id == answer.id:
-                            total_margin += margin_scores.get(matchup.margin, 1)
-                    margins[answer.id] = total_margin
-
-                # Sort by margin
-                sorted_group = sorted(group, key=lambda a: margins[a.id], reverse=True)
+                # Use LLM to determine novelty
+                self.log(f"  Breaking tie for {len(group)} answers with {count} wins using novelty")
+                sorted_group = await self._sort_by_novelty(group, requirement)
                 result.extend(sorted_group)
-                self.log(f"  Tie broken for {len(group)} answers with {count} wins using margin")
 
         return result
+
+    async def _sort_by_novelty(
+        self,
+        tied_answers: List[RequirementAnswer],
+        requirement: Dict[str, Any]
+    ) -> List[RequirementAnswer]:
+        """
+        Sort tied answers by novelty using LLM.
+
+        Args:
+            tied_answers: Answers with equal win counts
+            requirement: Requirement specification
+
+        Returns:
+            Sorted list with most novel first
+        """
+        if len(tied_answers) <= 1:
+            return tied_answers
+
+        # Build prompt for novelty comparison
+        prompt = self.prompt_manager.get_prompt(
+            "ranking/novelty_tiebreaker",
+            requirement=requirement,
+            answers=[self._answer_to_dict(a) for a in tied_answers]
+        )
+
+        try:
+            response = await self.llm.generate_json(
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                purpose="novelty_tiebreaker"
+            )
+
+            more_novel_id = response.get("more_novel_id")
+            self.log(f"  Novelty winner: {more_novel_id[:8] if more_novel_id else 'none'}")
+
+            # Find the most novel answer and put it first
+            novel_answer = None
+            other_answers = []
+            for answer in tied_answers:
+                if self._get_answer_id(answer) == more_novel_id:
+                    novel_answer = answer
+                    # Mark as novelty winner
+                    if hasattr(answer, 'metadata'):
+                        answer.metadata["is_novelty_winner"] = True
+                else:
+                    other_answers.append(answer)
+
+            if novel_answer:
+                return [novel_answer] + other_answers
+            else:
+                return tied_answers
+
+        except Exception as e:
+            self.log(f"ERROR in novelty comparison: {e}", level="error")
+            return tied_answers  # Keep original order on error
+
+    # ========================================================================
+    # Helper Methods
+    # ========================================================================
+
+    def _get_answer_id(self, answer) -> str:
+        """Get answer ID supporting both dict and object forms."""
+        if isinstance(answer, dict):
+            return answer.get("id", "unknown")
+        return getattr(answer, "id", "unknown")
+
+    def _answer_to_dict(self, answer) -> Dict[str, Any]:
+        """Convert answer to dict for prompt template."""
+        if isinstance(answer, dict):
+            return answer
+
+        return {
+            "id": getattr(answer, "id", "unknown"),
+            "answer": getattr(answer, "answer", ""),
+            "rationale": getattr(answer, "rationale", ""),
+            "deliverables": getattr(answer, "deliverables", {}),
+            "metadata": getattr(answer, "metadata", {})
+        }

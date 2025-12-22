@@ -75,6 +75,7 @@ class GenerationAgent(BaseAgent):
         self.prompt_manager = prompt_manager or PromptManager()
 
         # === NEW: Data file management ===
+        self.experiment_dir = experiment_dir or ""  # Store for later use
         self.data_file_manager = None
         if experiment_dir:
             from ..utils.data_file_manager import DataFileManager
@@ -512,7 +513,8 @@ class GenerationAgent(BaseAgent):
         entity_analysis = await self._analyze_requirement_entities(
             requirement=requirement,
             context=context,
-            research_goal=research_goal  # Fallback only
+            research_goal=research_goal,
+            experiment_dir=self.experiment_dir  # NEW: For file path generation
         )
         self.log("  │ └─ STAGE 1 COMPLETE")
 
@@ -546,7 +548,8 @@ class GenerationAgent(BaseAgent):
         self,
         requirement: Dict[str, Any],
         context: Dict[str, RequirementAnswer],
-        research_goal: ResearchGoal
+        research_goal: ResearchGoal,
+        experiment_dir: str = ""
     ) -> Dict[str, Any]:
         """
         Stage 1: Analyze requirement to extract entities and data needs (NEW - Problem-Agnostic).
@@ -625,38 +628,72 @@ class GenerationAgent(BaseAgent):
             llm_duration = time.time() - llm_start
             self.log(f"  │ ✓ LLM responded in {llm_duration:.2f}s")
 
-            # Parse response structure
-            self.log("  │ [3/4] Parsing entity analysis response...")
+            # Parse response structure (NEW: matches requirement_analysis.jinja2 output)
+            self.log("  │ [3/4] Parsing requirement analysis response...")
+
+            # Extract requirement_id from input
+            req_id_str = requirement.get("requirement_id", "unknown")
+
+            # Parse new template structure
+            requirement_type = response.get("requirement_type", "collection_required")
+            chain1_strategy = response.get("chain1_strategy", {"skip_collection": False, "tools": []})
+            chain2_strategy = response.get("chain2_strategy", {"tools": []})
+            entity_names = response.get("entity_names", [])
+            input_files = response.get("input_files", [])
+
+            # Build entity_analysis with new structure
             entity_analysis = {
-                "primary_entities": response.get("primary_entities", []),
-                "data_requirements": response.get("data_requirements", []),
-                "analysis_needs": response.get("analysis_needs", []),
-                "context_refinements": response.get("context_refinements", {})
+                # NEW structure fields
+                "requirement_type": requirement_type,
+                "requirement_id": req_id_str,
+                "rationale": response.get("rationale", ""),
+                "input_files": input_files,
+                "chain1_strategy": chain1_strategy,
+                "chain2_strategy": chain2_strategy,
+                "expected_outputs": response.get("expected_outputs", []),
+                "entity_names": entity_names,
+                # DEPRECATED fields - kept for backward compatibility
+                "primary_entities": [],
+                "data_requirements": [],
+                "analysis_needs": [],
+                "context_refinements": {}
             }
 
-            # Log summary
-            num_entities = len(entity_analysis["primary_entities"])
-            num_data_reqs = len(entity_analysis["data_requirements"])
-            num_analysis = len(entity_analysis["analysis_needs"])
-            self.log(f"  │ ✓ Extracted: {num_entities} entities, {num_data_reqs} data reqs, {num_analysis} analyses")
+            # Log summary with new format
+            num_entities = len(entity_names)
+            num_c1_tools = len(chain1_strategy.get("tools", []))
+            num_c2_tools = len(chain2_strategy.get("tools", []))
+            skip_collection = chain1_strategy.get("skip_collection", False)
+
+            self.log(f"  │ ✓ Requirement type: {requirement_type}")
+            self.log(f"  │ ✓ Chain 1: {'SKIP' if skip_collection else f'{num_c1_tools} tools'}")
+            self.log(f"  │ ✓ Chain 2: {num_c2_tools} tools planned")
+            self.log(f"  │ ✓ Entities: {num_entities}")
 
             # Detailed entity logging
-            for entity in entity_analysis["primary_entities"]:
+            for entity in entity_names:
                 entity_type = entity.get("type", "unknown")
                 entity_name = entity.get("name", "unknown")
-                entity_priority = entity.get("priority", "unknown")
-                self.log(f"  │   - {entity_type}: {entity_name} ({entity_priority})")
+                self.log(f"  │   - {entity_type}: {entity_name}")
+
+            # Log input files if present
+            if input_files:
+                self.log(f"  │ ✓ Input files: {len(input_files)}")
+                for f in input_files:
+                    self.log(f"  │   - {f.get('type', '?')}: {f.get('path', '?')}")
 
             # Validation
-            self.log("  │ [4/4] Validating entity analysis...")
-            if num_entities == 0:
-                self.log(f"  │ ⚠️  Warning: No entities extracted, using fallback", "warning")
-                return self._create_fallback_entity_analysis(requirement, research_goal)
+            self.log("  │ [4/4] Validating requirement analysis...")
 
-            # Structural validation
-            if not self._validate_entity_analysis(entity_analysis):
-                self.log(f"  │ ⚠️  Warning: Validation failed, using fallback", "warning")
-                return self._create_fallback_entity_analysis(requirement, research_goal)
+            # Check if we got valid requirement_type
+            if requirement_type not in ["input_only", "collection_required", "synthesis"]:
+                self.log(f"  │ ⚠️  Warning: Invalid requirement_type '{requirement_type}', using fallback", "warning")
+                return self._create_fallback_entity_analysis(requirement, research_goal, experiment_dir)
+
+            # Check if chain2_strategy has tools
+            if num_c2_tools == 0:
+                self.log(f"  │ ⚠️  Warning: No Chain 2 tools planned, using fallback", "warning")
+                return self._create_fallback_entity_analysis(requirement, research_goal, experiment_dir)
 
             self.log(f"  │ ✓ Validation passed")
 
@@ -671,7 +708,7 @@ class GenerationAgent(BaseAgent):
             self.log(f"  │ Traceback: {traceback.format_exc()}", "debug")
             self.log(f"  │ Using fallback entity analysis...")
 
-            result = self._create_fallback_entity_analysis(requirement, research_goal)
+            result = self._create_fallback_entity_analysis(requirement, research_goal, experiment_dir)
             func_duration = time.time() - func_start
             self.log(f"  └─ FUNCTION COMPLETED (with fallback): _analyze_requirement_entities()")
             self.log(f"     ⏱️  Duration: {func_duration:.2f}s")
@@ -680,46 +717,267 @@ class GenerationAgent(BaseAgent):
     def _create_fallback_entity_analysis(
         self,
         requirement: Dict[str, Any],
-        research_goal: ResearchGoal
+        research_goal: ResearchGoal,
+        experiment_dir: str = ""
     ) -> Dict[str, Any]:
         """
-        Create minimal entity analysis when Stage 1 fails.
+        Create requirement analysis when LLM parsing fails.
 
-        This provides graceful degradation - uses research_goal as fallback
-        to maintain backward compatibility with old configs.
+        Uses keyword-based rules to select appropriate tools (problem-agnostic).
         """
-        self.log("  │ Creating fallback entity analysis from research_goal...")
+        self.log("  │ Creating fallback requirement analysis (keyword-based)...")
 
-        # Extract requirement description as entity
-        req_description = requirement.get("description", "")
+        req_id = requirement.get("requirement_id", "unknown")
+        req_title = requirement.get("title", "").lower()
+        req_description = requirement.get("description", "").lower()
+        depends_on = requirement.get("depends_on", [])
+        combined_text = f"{req_title} {req_description}"
 
-        # Minimal entity structure
-        fallback_entity = {
-            "type": "unknown",
-            "name": research_goal.description[:100],  # Truncate for safety
-            "description": "Fallback entity from research goal",
-            "identifiers": {},
-            "source": "research_goal",
-            "priority": "required"
-        }
+        # Get input files from config
+        input_data_catalog = self.config.get("input_data_catalog", {})
+        has_input_files = input_data_catalog.get("has_input_files", False)
+        input_files = []
+        if has_input_files:
+            for f in input_data_catalog.get("files", []):
+                input_files.append({
+                    "path": f.get("file_path", ""),
+                    "type": f.get("file_type", "unknown"),
+                    "label": f.get("file_name", "")
+                })
 
-        # Minimal entity analysis
+        # ========== KEYWORD-BASED REQUIREMENT TYPE DETECTION ==========
+        requirement_type, chain1_tools, chain2_tools = self._detect_requirement_type_and_tools(
+            combined_text, depends_on, has_input_files, input_files
+        )
+
+        # Determine save paths
+        collection_path = f"{experiment_dir}/data/req_{req_id}/collection/sources.json" if experiment_dir else None
+        analysis_path = f"{experiment_dir}/data/req_{req_id}/analysis/results.json" if experiment_dir else None
+
+        # Determine if collection should be skipped
+        skip_collection = requirement_type in ["input_only", "synthesis"] or len(chain1_tools) == 0
+
+        # Create fallback analysis with problem-agnostic tool selection
         entity_analysis = {
-            "primary_entities": [fallback_entity],
-            "data_requirements": [
-                {
-                    "type": "all",
-                    "source": "all",
-                    "priority": "recommended",
-                    "reason": "Fallback: collect general data"
-                }
-            ],
+            "requirement_type": requirement_type,
+            "requirement_id": req_id,
+            "rationale": f"Keyword-based analysis - detected type: {requirement_type}",
+            "input_files": input_files,
+            "chain1_strategy": {
+                "skip_collection": skip_collection,
+                "rationale": f"Auto-selected based on requirement type: {requirement_type}",
+                "tools": chain1_tools,
+                "save_to": collection_path
+            },
+            "chain2_strategy": {
+                "analysis_type": requirement_type,
+                "rationale": f"Tools selected based on keywords in: {req_title[:50]}",
+                "tools": chain2_tools,
+                "depends_on": depends_on if depends_on else [],
+                "input_result_files": [
+                    f"{experiment_dir}/data/req_{dep}/analysis/results.json"
+                    for dep in depends_on
+                ] if depends_on and experiment_dir else [],
+                "multi_step": [],
+                "input_files": [f["path"] for f in input_files] if input_files else [],
+                "save_to": analysis_path
+            },
+            "expected_outputs": ["analysis_results"],
+            "entity_names": [{"type": "unknown", "name": research_goal.description[:100]}],
+            # DEPRECATED fields
+            "primary_entities": [],
+            "data_requirements": [],
             "analysis_needs": [],
             "context_refinements": {}
         }
 
-        self.log(f"  │ ✓ Fallback entity analysis created")
+        self.log(f"  │ ✓ Fallback analysis created (type: {requirement_type}, chain1: {len(chain1_tools)} tools, chain2: {len(chain2_tools)} tools)")
         return entity_analysis
+
+    def _detect_requirement_type_and_tools(
+        self,
+        text: str,
+        depends_on: list,
+        has_input_files: bool,
+        input_files: list
+    ) -> tuple:
+        """
+        Detect requirement type and select default tools based on keywords.
+
+        Priority order (highest first):
+        1. DESIGN - binder/inhibitor design (always uses structure tools)
+        2. NETWORK - network modeling/analysis (uses networkx)
+        3. TARGET_DISCOVERY - target identification (uses opentargets)
+        4. COMPUTATIONAL - structure prediction, docking
+        5. VALIDATION - off-target, selectivity
+        6. SYNTHESIS - pure integration (keyword-only, no depends_on condition)
+        7. INPUT_ONLY - file-based analysis
+        8. ANALYSIS - default database collection
+
+        Returns: (requirement_type, chain1_tools, chain2_tools)
+        """
+        chain1_tools = []
+        chain2_tools = []
+        text_lower = text.lower()
+
+        # ========== DESIGN TYPE (HIGHEST PRIORITY) ==========
+        # Design keywords should ALWAYS trigger design tools, regardless of depends_on
+        design_keywords = ["design", "generate", "create", "binder", "sequence design", "mini-binder",
+                          "inhibitor", "modality", "therapeutic", "antibody", "peptide"]
+        if any(kw in text_lower for kw in design_keywords):
+            requirement_type = "design"
+            # Chain 1: Get structure data if no dependencies, otherwise use previous
+            if not depends_on:
+                chain1_tools = [
+                    {"server": "rcsbpdb", "tool": "download_pdb", "arguments": {}, "purpose": "Get target structure", "required": True},
+                    {"server": "uniprot", "tool": "get_protein_info", "arguments": {}, "purpose": "Get target protein info", "required": True}
+                ]
+            else:
+                chain1_tools = [
+                    {"server": "esmfold", "tool": "predict_structure", "arguments": {}, "purpose": "Predict structure from previous sequence", "required": False}
+                ]
+            # Chain 2: Always include design tools
+            chain2_tools = [
+                {"server": "rfdiffusion", "tool": "design_binder", "arguments": {}, "purpose": "Design binder backbone", "required": True},
+                {"server": "proteinmpnn", "tool": "design_sequence", "arguments": {}, "purpose": "Design amino acid sequence", "required": True},
+                {"server": "esmfold", "tool": "predict_structure", "arguments": {}, "purpose": "Validate designed fold", "required": True},
+                {"server": "vina", "tool": "dock_ligand", "arguments": {}, "purpose": "Validate binding", "required": False}
+            ]
+            return requirement_type, chain1_tools, chain2_tools
+
+        # ========== NETWORK TYPE (NEW - for network modeling) ==========
+        network_keywords = ["network", "topology", "hub", "centrality", "node", "interaction network",
+                           "ppi", "pathway model", "graph", "community"]
+        if any(kw in text_lower for kw in network_keywords):
+            requirement_type = "network"
+            # Chain 1: Get interaction data if no dependencies
+            if not depends_on:
+                chain1_tools = [
+                    {"server": "stringdb", "tool": "get_protein_network", "arguments": {}, "purpose": "Get protein interaction network", "required": True},
+                    {"server": "stringdb", "tool": "get_interaction_partners", "arguments": {}, "purpose": "Get interaction partners", "required": True}
+                ]
+            # Chain 2: Network analysis tools
+            chain2_tools = [
+                {"server": "networkx", "tool": "create_network", "arguments": {}, "purpose": "Create network from interactions", "required": True},
+                {"server": "networkx", "tool": "analyze_network", "arguments": {}, "purpose": "Calculate centrality and identify hubs", "required": True},
+                {"server": "networkx", "tool": "find_communities", "arguments": {}, "purpose": "Detect network communities", "required": False},
+                {"server": "pandas_analysis", "tool": "run_pandas_code_tool", "arguments": {}, "purpose": "Summarize network metrics", "required": True}
+            ]
+            return requirement_type, chain1_tools, chain2_tools
+
+        # ========== TARGET_DISCOVERY TYPE (NEW - for target identification) ==========
+        target_keywords = ["target", "candidate", "propose", "rationale", "druggability", "tractability"]
+        if any(kw in text_lower for kw in target_keywords):
+            requirement_type = "target_discovery"
+            # Chain 1: Get target-disease association data
+            if not depends_on:
+                chain1_tools = [
+                    {"server": "opentargets", "tool": "search_disease_targets", "arguments": {}, "purpose": "Find disease-target associations", "required": True},
+                    {"server": "opentargets", "tool": "get_target_tractability", "arguments": {}, "purpose": "Assess target druggability", "required": True},
+                    {"server": "chembl", "tool": "search_target", "arguments": {}, "purpose": "Find existing drugs/compounds", "required": True}
+                ]
+            else:
+                chain1_tools = [
+                    {"server": "opentargets", "tool": "get_target_tractability", "arguments": {}, "purpose": "Assess target druggability", "required": True}
+                ]
+            # Chain 2: Analysis and ranking
+            chain2_tools = [
+                {"server": "pandas_analysis", "tool": "run_pandas_code_tool", "arguments": {},
+                 "code_hint": "Rank targets by tractability score and evidence",
+                 "purpose": "Rank and prioritize targets", "required": True}
+            ]
+            return requirement_type, chain1_tools, chain2_tools
+
+        # ========== COMPUTATIONAL TYPE (structure prediction, docking) ==========
+        computational_keywords = ["predict", "dock", "affinity", "binding", "structure", "kd", "kon", "koff", "energy"]
+        if any(kw in text_lower for kw in computational_keywords) and depends_on:
+            requirement_type = "computational"
+            chain1_tools = []  # Use previous results
+            chain2_tools = [
+                {"server": "esmfold", "tool": "predict_structure", "arguments": {}, "purpose": "Predict 3D structure", "required": True},
+                {"server": "rosetta", "tool": "dock_proteins", "arguments": {}, "purpose": "Dock proteins", "required": True},
+                {"server": "rosetta", "tool": "calculate_energy", "arguments": {}, "purpose": "Calculate binding energy", "required": True}
+            ]
+            return requirement_type, chain1_tools, chain2_tools
+
+        # ========== VALIDATION TYPE (off-target, selectivity) ==========
+        validation_keywords = ["off-target", "selectivity", "specificity", "screen", "evaluate", "validate"]
+        if any(kw in text_lower for kw in validation_keywords):
+            requirement_type = "validation"
+            chain1_tools = [
+                {"server": "blast", "tool": "blastp", "arguments": {}, "purpose": "Find similar proteins", "required": True},
+                {"server": "stringdb", "tool": "get_interaction_partners", "arguments": {}, "purpose": "Get related proteins", "required": True},
+                {"server": "uniprot", "tool": "get_protein_info", "arguments": {}, "purpose": "Get protein details", "required": True}
+            ]
+            chain2_tools = [
+                {"server": "rosetta", "tool": "dock_proteins", "arguments": {}, "purpose": "Cross-dock to off-targets", "required": True},
+                {"server": "pandas_analysis", "tool": "run_pandas_code_tool", "arguments": {}, "purpose": "Calculate selectivity", "required": True}
+            ]
+            return requirement_type, chain1_tools, chain2_tools
+
+        # ========== SYNTHESIS TYPE (integration, ranking) - KEYWORD ONLY ==========
+        # FIXED: Removed len(depends_on) >= 2 condition to prevent over-matching
+        synthesis_keywords = ["integrate", "combine", "rank", "prioritize", "synthesis", "final", "summarize"]
+        if any(kw in text_lower for kw in synthesis_keywords):
+            requirement_type = "synthesis"
+            chain1_tools = []  # Use previous results
+            # Enhanced Chain 2 with more analysis tools
+            chain2_tools = [
+                {"server": "networkx", "tool": "analyze_network", "arguments": {}, "purpose": "Analyze integrated network", "required": False},
+                {"server": "pandas_analysis", "tool": "run_pandas_code_tool", "arguments": {},
+                 "code_hint": "Load previous results with pd.read_json() and integrate",
+                 "purpose": "Integrate and rank results", "required": True}
+            ]
+            return requirement_type, chain1_tools, chain2_tools
+
+        # ========== INPUT_ONLY TYPE (file-based analysis) ==========
+        if has_input_files:
+            requirement_type = "input_only"
+            chain1_tools = []  # Input files provided
+
+            # Select tools based on file type
+            file_types = [f.get("type", "").lower() for f in input_files]
+            if any(ft in ["csv", "tsv", "expression"] for ft in file_types):
+                chain2_tools = [
+                    {"server": "pandas_analysis", "tool": "read_metadata_tool", "arguments": {}, "purpose": "Check file structure", "required": True},
+                    {"server": "pandas_analysis", "tool": "run_pandas_code_tool", "arguments": {},
+                     "code_hint": "df = pd.read_csv(file_path); correlation = df.corr()",
+                     "purpose": "Analyze expression data", "required": True}
+                ]
+            elif any(ft in ["bam", "sam"] for ft in file_types):
+                chain2_tools = [
+                    {"server": "nanopore", "tool": "get_alignment_stats", "arguments": {}, "purpose": "Get alignment stats", "required": True},
+                    {"server": "nanopore", "tool": "analyze_polya_lengths", "arguments": {}, "purpose": "Analyze poly(A)", "required": True}
+                ]
+            elif any(ft in ["pod5"] for ft in file_types):
+                chain2_tools = [
+                    {"server": "nanopore", "tool": "read_pod5_info", "arguments": {}, "purpose": "Read POD5 info", "required": True},
+                    {"server": "nanopore", "tool": "detect_modified_bases", "arguments": {}, "purpose": "Detect modifications", "required": True}
+                ]
+            elif any(ft in ["fasta", "fa"] for ft in file_types):
+                chain2_tools = [
+                    {"server": "blast", "tool": "blastp", "arguments": {}, "purpose": "Find similar sequences", "required": True},
+                    {"server": "msa", "tool": "align_sequences", "arguments": {}, "purpose": "Align sequences", "required": True}
+                ]
+            else:
+                chain2_tools = [
+                    {"server": "pandas_analysis", "tool": "run_pandas_code_tool", "arguments": {}, "purpose": "Generic analysis", "required": True}
+                ]
+            return requirement_type, chain1_tools, chain2_tools
+
+        # ========== ANALYSIS TYPE (default - database collection) ==========
+        requirement_type = "analysis"
+        chain1_tools = [
+            {"server": "ncbi", "tool": "search_pubmed", "arguments": {}, "purpose": "Search literature", "required": True},
+            {"server": "uniprot", "tool": "get_protein_info", "arguments": {}, "purpose": "Get protein info", "required": True},
+            {"server": "kegg", "tool": "get_pathway_info", "arguments": {}, "purpose": "Get pathway info", "required": False}
+        ]
+        chain2_tools = [
+            {"server": "pandas_analysis", "tool": "run_pandas_code_tool", "arguments": {},
+             "code_hint": "Load collected data with pd.read_json() and analyze",
+             "purpose": "Analyze collected data", "required": True}
+        ]
+        return requirement_type, chain1_tools, chain2_tools
 
     def _validate_entity_analysis(self, entity_analysis: Dict[str, Any]) -> bool:
         """
@@ -833,61 +1091,6 @@ class GenerationAgent(BaseAgent):
         import time
         func_start = time.time()
         self.log("  ┌─ FUNCTION: _generate_diverse_answers()")
-
-        # Extract requirement details
-        if isinstance(requirement, dict):
-            req_id = requirement.get("requirement_id", requirement.get("step_id", ""))
-            req_title = requirement.get("title", "")
-            req_description = requirement.get("description", "")
-            req_type = requirement.get("requirement_type", "answer")
-            expected_deliverables = requirement.get("expected_deliverables", [])
-            depends_on = requirement.get("depends_on", [])
-        else:
-            req_id = getattr(requirement, "requirement_id", "")
-            req_title = getattr(requirement, "title", "")
-            req_description = getattr(requirement, "description", "")
-            req_type = getattr(requirement, "requirement_type", "answer")
-            expected_deliverables = getattr(requirement, "expected_deliverables", [])
-            depends_on = getattr(requirement, "depends_on", [])
-
-        # Prepare context for prompt
-        parsed_problem = self.config.get("parsed_problem", {})
-
-        # Convert context (RequirementAnswer objects) to serializable format
-        context_for_prompt = {}
-        for dep_id, answer in context.items():
-            if isinstance(answer, dict):
-                context_for_prompt[dep_id] = answer
-            else:
-                context_for_prompt[dep_id] = {
-                    "requirement_id": answer.requirement_id,
-                    "requirement_title": answer.requirement_title,
-                    "answer": answer.answer,
-                    "rationale": answer.rationale,
-                    "deliverables": answer.deliverables,
-                    "confidence": answer.confidence
-                }
-
-        # === MODIFIED: File-based mode with fallback ===
-        if self.data_file_manager and "_file_paths" in collected_data:
-            self.log(f"  │ Using file-based analysis results (zero truncation)")
-
-            # Load ONLY Chain 2 analysis results (not Chain 1 data)
-            analysis_results = self.data_file_manager.load_analysis_results(req_id)
-
-            truncated_data = {
-                "sources": {},  # Empty - not needed for Answer Gen
-                "analysis": analysis_results,  # Full analysis results
-                "_file_paths": collected_data["_file_paths"],
-                "_metadata_only": False  # Analysis results are complete
-            }
-        else:
-            # FALLBACK: Old truncation (backward compatible)
-            self.log(f"  │ Using legacy truncation (no DataFileManager)")
-            truncated_data = self._truncate_data_for_prompt(collected_data)
-
-        # NOTE: Removed old single-prompt generation code
-        # Now using parallel generation with _generate_single_answer()
 
         try:
             # === PARALLEL GENERATION: 3 independent LLM calls ===
@@ -1023,11 +1226,25 @@ class GenerationAgent(BaseAgent):
 
         try:
             # Call LLM with strategy-specific prompt
+            # Use separate model for answer generation (configurable via ANSWER_GENERATION_MODEL)
+            import os
+            answer_model = os.getenv("ANSWER_GENERATION_MODEL")  # None이면 기본 모델 사용
+            if answer_model:
+                self.log(f"  Using model: {answer_model} for answer generation")
+
             llm_start = time.time()
+            # Answer generation needs higher max_tokens for long manuscript drafts
+            # Claude Opus: 32K, GPT-4.5: 16K - use 16K as safe default
+            # 환경변수: ANSWER_GENERATION_MAX_TOKENS (ANSWER_GENERATION_MODEL과 일관성)
+            max_tokens_str = os.getenv("ANSWER_GENERATION_MAX_TOKENS", "16384").replace(",", "")
+            answer_max_tokens = int(max_tokens_str)
+
             response = await self.llm.generate_json(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.8,
-                purpose=f"single_answer_{strategy}_{req_id}"
+                max_tokens=answer_max_tokens,  # 8192 → 16384 (긴 출력 지원)
+                purpose=f"single_answer_{strategy}_{req_id}",
+                model=answer_model  # None이면 기본 모델, 설정되면 해당 모델 사용
             )
             llm_duration = time.time() - llm_start
 
@@ -1061,7 +1278,7 @@ class GenerationAgent(BaseAgent):
                 "data_analysis": {
                     "analyses_performed": list(collected_data.get("analysis", {}).keys()),
                     "tools": collected_data.get("tool_usage", {}).get("analysis_tools", []),
-                    "results_file": collected_data.get("_file_paths", {}).get("analysis")
+                    "results_file": collected_data.get("_file_paths", {}).get("results_file")  # Fixed: use 'results_file' key
                 }
             }
 
@@ -1231,14 +1448,6 @@ class GenerationAgent(BaseAgent):
             self.log(f"[EVOLVE] ✗ Failed to evolve answer: {e}", "error")
             return None
 
-    # ========================================================================
-    # END: RequirementAnswer-based Generation
-    # ========================================================================
-    # NOTE: Old protein-centric methods (_extract_target_name, _extract_target_fallback)
-    # have been DELETED in Phase 3.2 of the Problem-Agnostic refactoring.
-    # Replaced by _analyze_requirement_entities() which supports all biomedical domains.
-    # ========================================================================
-
     async def _execute_unified_collection_analysis(
         self,
         entity_analysis: Dict[str, Any],
@@ -1272,19 +1481,28 @@ class GenerationAgent(BaseAgent):
         self.log("🔧 FUNCTION: _execute_unified_collection_analysis() [STAGE 2 - NEW]")
         self.log("─" * 60)
 
-        # Extract entity summary for logging
-        num_entities = len(entity_analysis.get("primary_entities", []))
-        num_data_reqs = len(entity_analysis.get("data_requirements", []))
-        num_analyses = len(entity_analysis.get("analysis_needs", []))
-        self.log(f"[STAGE-2] Entity Analysis Summary:")
-        self.log(f"[STAGE-2]   - Entities: {num_entities}")
-        self.log(f"[STAGE-2]   - Data requirements: {num_data_reqs}")
-        self.log(f"[STAGE-2]   - Analysis needs: {num_analyses}")
+        # Extract requirement analysis summary for logging (NEW structure)
+        requirement_type = entity_analysis.get("requirement_type", "collection_required")
+        chain1_strategy = entity_analysis.get("chain1_strategy", {})
+        chain2_strategy = entity_analysis.get("chain2_strategy", {})
+        entity_names = entity_analysis.get("entity_names", [])
+        input_files = entity_analysis.get("input_files", [])
 
-        # Step 1: Extract entity types for tool filtering (NEW - replaces problem_type)
+        skip_chain1 = chain1_strategy.get("skip_collection", False)
+        num_c1_tools = len(chain1_strategy.get("tools", []))
+        num_c2_tools = len(chain2_strategy.get("tools", []))
+
+        self.log(f"[STAGE-2] Requirement Analysis Summary:")
+        self.log(f"[STAGE-2]   - Type: {requirement_type}")
+        self.log(f"[STAGE-2]   - Chain 1: {'SKIP' if skip_chain1 else f'{num_c1_tools} tools planned'}")
+        self.log(f"[STAGE-2]   - Chain 2: {num_c2_tools} tools planned")
+        self.log(f"[STAGE-2]   - Entities: {len(entity_names)}")
+        self.log(f"[STAGE-2]   - Input files: {len(input_files)}")
+
+        # Step 1: Extract entity types for tool filtering
         self.log("[STAGE-2] Step 1: Extracting entity types for tool filtering...")
         entity_types = set()
-        for entity in entity_analysis.get("primary_entities", []):
+        for entity in entity_names:
             entity_type = entity.get("type", "unknown")
             entity_types.add(entity_type)
         self.log(f"[STAGE-2] ✓ Entity types: {list(entity_types)}")
@@ -1332,36 +1550,40 @@ class GenerationAgent(BaseAgent):
                             loaded_files[file_name] = loaded
                             self.log(f"[STAGE-2]   ✓ Loaded {file_name}")
 
-                if loaded_files:
-                    # Build file paths dictionary for tools that need full data access
-                    file_paths = {}
-                    for file_name in files_for_req:
-                        file_info = next(
-                            (f for f in input_data_catalog["files"] if f["file_name"] == file_name),
-                            None
-                        )
-                        if file_info:
-                            file_paths[file_name] = {
-                                "path": file_info["file_path"],
-                                "type": file_info["file_type"],
-                                "size_kb": file_info["file_size_kb"]
-                            }
-
-                    # Add loaded files to sources with BOTH preview data AND file paths
-                    collected_data["sources"]["input_files"] = {
-                        "tool": "data_file_loader",
-                        "result": loaded_files,  # Preview data (max 1000 rows for CSV, samples for BAM/POD5)
-                        "file_paths": file_paths,  # Full file paths for tools that need complete data
-                        "metadata": {
-                            "num_files": len(loaded_files),
-                            "file_names": list(loaded_files.keys()),
-                            "usage_note": "Use 'result' for data preview/structure inspection, use 'file_paths' for full data analysis"
+                # ALWAYS build file_paths from catalog (regardless of content loading success)
+                # This ensures LLM gets correct paths even if pysam/pod5 libraries are missing
+                file_paths = {}
+                for file_name in files_for_req:
+                    file_info = next(
+                        (f for f in input_data_catalog["files"] if f["file_name"] == file_name),
+                        None
+                    )
+                    if file_info:
+                        file_paths[file_name] = {
+                            "path": file_info["file_path"],
+                            "type": file_info["file_type"],
+                            "size_kb": file_info["file_size_kb"]
                         }
+
+                # ALWAYS add input_files to sources (even if content loading failed)
+                # file_paths is critical for LLM to use correct paths in tool calls
+                collected_data["sources"]["input_files"] = {
+                    "tool": "data_file_loader",
+                    "result": loaded_files,  # Preview data (may be empty if loading failed)
+                    "file_paths": file_paths,  # Full file paths for tools - ALWAYS populated
+                    "metadata": {
+                        "num_files": len(file_paths),  # Count paths, not loaded files
+                        "num_loaded": len(loaded_files),
+                        "file_names": list(file_paths.keys()),
+                        "usage_note": "Use 'file_paths' for tool arguments. Use 'result' for data preview (if available)."
                     }
-                    self.log(f"[STAGE-2] ✓ Loaded {len(loaded_files)} data file(s) (preview mode)")
-                    self.log(f"[STAGE-2]   Full file paths available for: {list(file_paths.keys())}")
+                }
+
+                if loaded_files:
+                    self.log(f"[STAGE-2] ✓ Loaded {len(loaded_files)}/{len(file_paths)} data file(s)")
                 else:
-                    self.log("[STAGE-2]   No files successfully loaded")
+                    self.log(f"[STAGE-2] ⚠️ Content loading failed, but {len(file_paths)} file paths available for tools")
+                self.log(f"[STAGE-2]   File paths: {list(file_paths.keys())}")
             else:
                 self.log(f"[STAGE-2]   No files mapped to requirement {req_id}")
         else:
@@ -1373,13 +1595,34 @@ class GenerationAgent(BaseAgent):
         self.log("=" * 60)
         chain1_start = time.time()
 
-        self.log("[CHAIN-1] [1/5] Getting collection tools from registry...")
-        # NEW: Get all collection tools (entity-agnostic filtering done by LLM)
-        collection_tools = self.tool_registry.get_collection_tools(
-            problem_type="all",  # Get all tools, LLM will filter based on entity_analysis
-            stage="generation"
+        # NEW (v3.2): Set context for automatic parameter mapping
+        input_files_context = {}
+        if "input_files" in collected_data.get("sources", {}):
+            input_files_context = collected_data["sources"]["input_files"].get("file_paths", {})
+
+        self.tool_executor.set_context(
+            input_files=input_files_context,
+            collected_data=collected_data.get("sources", {}),
+            entity_analysis=entity_analysis
         )
-        self.log(f"[CHAIN-1] ✓ Found {len(collection_tools)} collection tools (all types)")
+        self.log("[CHAIN-1] ✓ ToolExecutor context set for auto-parameter mapping")
+
+        # Check if Chain 1 should be skipped (NEW: based on requirement_analysis)
+        if skip_chain1:
+            self.log(f"[CHAIN-1] ⏭️  SKIPPING - requirement_type is '{requirement_type}'")
+            self.log(f"[CHAIN-1]    Reason: {chain1_strategy.get('rationale', 'No collection needed')}")
+
+        # Get collection tools (skip if Chain 1 is not needed)
+        if skip_chain1:
+            collection_tools = []  # Empty list = no tools to execute
+            self.log("[CHAIN-1] [1/5] Skipped getting collection tools")
+        else:
+            self.log("[CHAIN-1] [1/5] Getting collection tools from registry...")
+            collection_tools = self.tool_registry.get_collection_tools(
+                problem_type="all",  # Get all tools, LLM will filter based on entity_analysis
+                stage="generation"
+            )
+            self.log(f"[CHAIN-1] ✓ Found {len(collection_tools)} collection tools (all types)")
 
         if collection_tools:
             self.log(f"[CHAIN-1]    Sample tools: {[t['function']['name'] for t in collection_tools[:5]]}{'...' if len(collection_tools) > 5 else ''}")
@@ -1397,11 +1640,11 @@ class GenerationAgent(BaseAgent):
 
             collection_prompt = self.prompt_manager.get_prompt(
                 'generation/chain1_collection',
+                requirement_analysis=entity_analysis,  # NEW: Template expects 'requirement_analysis'
                 research_goal=research_goal,
-                entity_analysis=entity_analysis,  # NEW: Pass entity_analysis instead of target_name
-                tool_names=tool_names,
-                context_refinements=entity_analysis.get("context_refinements", {}),  # NEW
-                input_data_files=input_data_files  # NEW: Pass input file paths for pandas tools
+                experiment_dir=self.experiment_dir,
+                input_data_files=input_data_files,
+                tool_names=tool_names
             )
             self.log(f"[CHAIN-1] ✓ Prompt prepared ({len(collection_prompt)} chars)")
             self.log(f"[CHAIN-1]    Entity-driven tool selection enabled")
@@ -1508,6 +1751,18 @@ class GenerationAgent(BaseAgent):
         self.log("=" * 60)
         chain2_start = time.time()
 
+        # NEW (v3.2): Update context with Chain 1 collected data
+        input_files_context = {}
+        if "input_files" in collected_data.get("sources", {}):
+            input_files_context = collected_data["sources"]["input_files"].get("file_paths", {})
+
+        self.tool_executor.set_context(
+            input_files=input_files_context,
+            collected_data=collected_data.get("sources", {}),
+            entity_analysis=entity_analysis
+        )
+        self.log("[CHAIN-2] ✓ ToolExecutor context updated with Chain 1 data")
+
         self.log("[CHAIN-2] [1/5] Getting analysis tools from registry...")
         # NEW: Get all analysis tools (entity-agnostic filtering done by LLM)
         analysis_tools = self.tool_registry.get_analysis_tools(
@@ -1542,78 +1797,133 @@ class GenerationAgent(BaseAgent):
         if "input_files" in collected_data.get("sources", {}):
             input_data_files = collected_data["sources"]["input_files"].get("file_paths", {})
 
+        # NEW: Pass requirement_analysis object to template (matches new template structure)
         analysis_prompt = self.prompt_manager.get_prompt(
             'generation/chain2_analysis',
+            requirement_analysis=entity_analysis,  # NEW: Full requirement analysis object
             research_goal=research_goal,
-            entity_analysis=entity_analysis,  # NEW: Pass entity_analysis
-            analysis_needs=entity_analysis.get("analysis_needs", []),  # NEW
-            collected_data_summary=data_summary,
-            tool_names=analysis_tool_names,
-            context_refinements=entity_analysis.get("context_refinements", {}),  # NEW
-            input_data_files=input_data_files  # NEW: Pass input file paths for pandas tools
+            experiment_dir=self.experiment_dir if hasattr(self, 'experiment_dir') else "",
+            input_data_files=input_data_files,
+            collection_result=data_summary,  # Chain 1 collected data summary
+            tool_names=analysis_tool_names
         )
         self.log(f"[CHAIN-2] ✓ Prompt prepared ({len(analysis_prompt)} chars)")
-        self.log(f"[CHAIN-2]    Analysis needs: {entity_analysis.get('analysis_needs', [])}")
+        self.log(f"[CHAIN-2]    Requirement type: {entity_analysis.get('requirement_type', 'unknown')}")
+        self.log(f"[CHAIN-2]    Chain 2 tools planned: {len(entity_analysis.get('chain2_strategy', {}).get('tools', []))}")
 
         try:
-            self.log("[CHAIN-2] [4/5] Calling LLM.generate_with_tools()...")
-            self.log(f"[CHAIN-2]    - temperature: 0.1")
-            self.log(f"[CHAIN-2]    - max_iterations: 5")
+            # === ReAct-Style Iterative Analysis Loop ===
+            self.log("[CHAIN-2] [4/5] Starting ReAct-style iterative analysis...")
 
-            llm_start = time.time()
-            analysis_result = await self.llm.generate_with_tools(
-                messages=[{"role": "user", "content": analysis_prompt}],
-                tools=analysis_tools,
-                tool_choice="auto",
-                temperature=0.1,
-                max_iterations=5,
-                purpose="data_analysis"
-            )
-            llm_duration = time.time() - llm_start
+            iteration = 0
+            max_react_iterations = 10
+            total_tool_calls = 0
 
-            tool_calls = analysis_result.get("tool_calls", [])
-            self.log(f"[CHAIN-2] ✓ LLM responded in {llm_duration:.2f}s")
-            self.log(f"[CHAIN-2] ✓ LLM selected {len(tool_calls)} tool(s) to execute")
+            # Build conversation history for multi-turn reasoning
+            conversation_messages = [{"role": "user", "content": analysis_prompt}]
 
-            # Debug: Log tool calls and arguments
-            for tc in tool_calls:
-                tool_name = tc.get("name", "unknown")
-                args = tc.get("arguments", {})
-                self.log(f"[CHAIN-2]    - {tool_name}: {len(args)} argument(s) - {list(args.keys()) if args else '[]'}", "debug")
+            while iteration < max_react_iterations:
+                iteration += 1
+                self.log(f"[CHAIN-2] 🔄 ReAct iteration {iteration}/{max_react_iterations}")
 
-            # Execute analysis tool calls
-            self.log("[CHAIN-2] [5/5] Executing analysis tools...")
-            for idx, tool_call in enumerate(tool_calls, 1):
-                tool_name = tool_call.get("name")
-                arguments = tool_call.get("arguments", {})
+                llm_start = time.time()
+                analysis_result = await self.llm.generate_with_tools(
+                    messages=conversation_messages,
+                    tools=analysis_tools,
+                    tool_choice="auto",
+                    temperature=0.2,
+                    max_iterations=1,  # Single iteration per ReAct step
+                    purpose=f"data_analysis_iter_{iteration}"
+                )
+                llm_duration = time.time() - llm_start
 
-                try:
-                    self.log(f"[CHAIN-2]    [{idx}/{len(tool_calls)}] Starting: {tool_name}")
-                    tool_start = time.time()
-                    result = await self.tool_executor.execute_tool(tool_name, arguments)
-                    tool_duration = time.time() - tool_start
+                tool_calls = analysis_result.get("tool_calls", [])
+                response_text = analysis_result.get("text", "")
 
-                    collected_data["analysis"][tool_name] = result
+                self.log(f"[CHAIN-2]    LLM responded in {llm_duration:.2f}s, {len(tool_calls)} tool call(s)")
 
-                    # Track tool usage for config export
-                    collected_data["tool_usage"]["analysis_tools"].append({
-                        "tool_name": tool_name,
-                        "arguments": arguments,
-                        "duration_seconds": round(tool_duration, 2),
-                        "status": "success"
-                    })
+                # No tool calls means analysis is complete
+                if not tool_calls:
+                    self.log(f"[CHAIN-2] ✓ No more tool calls - analysis reasoning complete")
+                    # Save final response if any
+                    if response_text:
+                        collected_data["analysis"]["_final_reasoning"] = response_text
+                    break
 
-                    self.log(f"[CHAIN-2]    [{idx}/{len(tool_calls)}] ✓ {tool_name} completed in {tool_duration:.2f}s")
+                # Execute tool calls for this iteration
+                iteration_results = []
+                for idx, tool_call in enumerate(tool_calls, 1):
+                    tool_name = tool_call.get("name")
+                    arguments = tool_call.get("arguments", {})
+                    total_tool_calls += 1
 
-                except Exception as e:
-                    self.log(f"[CHAIN-2]    [{idx}/{len(tool_calls)}] ✗ {tool_name} failed: {e}", "warning")
-                    # Track failed tool usage
-                    collected_data["tool_usage"]["analysis_tools"].append({
-                        "tool_name": tool_name,
-                        "arguments": arguments,
-                        "status": "failed",
-                        "error": str(e)
-                    })
+                    try:
+                        self.log(f"[CHAIN-2]    [{idx}/{len(tool_calls)}] Executing: {tool_name}")
+                        tool_start = time.time()
+                        result = await self.tool_executor.execute_tool(tool_name, arguments)
+                        tool_duration = time.time() - tool_start
+
+                        # Store result with unique key (allow multiple calls to same tool)
+                        result_key = f"{tool_name}_{total_tool_calls}"
+                        collected_data["analysis"][result_key] = result
+
+                        # Track tool usage
+                        collected_data["tool_usage"]["analysis_tools"].append({
+                            "tool_name": tool_name,
+                            "arguments": arguments,
+                            "duration_seconds": round(tool_duration, 2),
+                            "status": "success",
+                            "react_iteration": iteration
+                        })
+
+                        self.log(f"[CHAIN-2]    [{idx}/{len(tool_calls)}] ✓ {tool_name} completed in {tool_duration:.2f}s")
+
+                        # Save ALL results to file immediately (no data loss)
+                        result_str = str(result)
+                        result_file_path = None
+                        if self.data_file_manager:
+                            # Save ALL results to separate files (no size threshold)
+                            result_file_path = self.data_file_manager.save_iteration_result(
+                                req_id, iteration, result_key, result
+                            )
+                            self.log(f"[CHAIN-2]    📁 Saved full result to: {result_file_path}")
+                            # For LLM: show truncated preview + file path
+                            if len(result_str) > 1500:
+                                iteration_results.append(
+                                    f"**{tool_name}**: {result_str[:1500]}... [Full result saved to: {result_file_path}]"
+                                )
+                            else:
+                                iteration_results.append(
+                                    f"**{tool_name}**: {result_str} [Full result saved to: {result_file_path}]"
+                                )
+
+                    except Exception as e:
+                        self.log(f"[CHAIN-2]    [{idx}/{len(tool_calls)}] ✗ {tool_name} failed: {e}", "warning")
+                        collected_data["tool_usage"]["analysis_tools"].append({
+                            "tool_name": tool_name,
+                            "arguments": arguments,
+                            "status": "failed",
+                            "error": str(e),
+                            "react_iteration": iteration
+                        })
+                        iteration_results.append(f"**{tool_name}**: ERROR - {str(e)}")
+
+                # Add assistant response and tool results to conversation
+                assistant_content = response_text if response_text else f"Calling {len(tool_calls)} tool(s): {[tc.get('name') for tc in tool_calls]}"
+                conversation_messages.append({"role": "assistant", "content": assistant_content})
+
+                # Add tool results as user message for next iteration (using template)
+                follow_up_prompt = self.prompt_manager.get_prompt(
+                    'generation/react_followup',
+                    iteration=iteration,
+                    iteration_results=iteration_results
+                )
+                conversation_messages.append({"role": "user", "content": follow_up_prompt})
+
+            if iteration >= max_react_iterations:
+                self.log(f"[CHAIN-2] ⚠️ Reached max iterations ({max_react_iterations})")
+
+            self.log(f"[CHAIN-2] ✓ ReAct completed: {iteration} iteration(s), {total_tool_calls} total tool call(s)")
 
         except Exception as e:
             self.log(f"[CHAIN-2] ✗ Chain 2 error: {e}", "error")
@@ -1655,12 +1965,12 @@ class GenerationAgent(BaseAgent):
 
         return collected_data
 
-
     def _get_server_name_from_tool(self, tool_name: str) -> str:
         """Get server name from tool name"""
         tool_lower = tool_name.lower()
 
         # Map common tool name patterns to server names
+        # Updated to include ALL MCP servers from biocoscientist/mcp/servers/
         server_mappings = {
             # KEGG tools
             "kegg": "KEGG",
@@ -1679,7 +1989,6 @@ class GenerationAgent(BaseAgent):
             "gene": "UniProt",  # search_by_gene
             "sequence": "UniProt",
             "feature": "UniProt",
-            "domain": "UniProt",
             "variant": "UniProt",
             "homolog": "UniProt",
             "taxonomy": "UniProt",
@@ -1688,18 +1997,71 @@ class GenerationAgent(BaseAgent):
             "pubmed": "NCBI",
             "article": "NCBI",
             "mesh": "NCBI",
-            # Other tools
-            "scholar": "Scholar",
-            "reactome": "Reactome",
+            # STRING-DB tools
+            "stringdb": "StringDB",
+            "string": "StringDB",
+            "network": "StringDB",
+            "enrichment": "StringDB",
+            # G:Profiler tools
+            "gprofiler": "GProfiler",
+            "gost": "GProfiler",
+            # PDB tools
             "pdb": "PDB",
+            "rcsb": "PDB",
             "structure": "PDB",
+            # InterPro tools
+            "interpro": "InterPro",
+            # ChEMBL tools
+            "chembl": "ChEMBL",
+            # OpenTargets tools
+            "opentargets": "OpenTargets",
+            "target": "OpenTargets",
+            # IEDB tools
+            "iedb": "IEDB",
+            "epitope": "IEDB",
+            # Vina tools
+            "vina": "Vina",
+            "autodock": "Vina",
+            "docking": "Vina",
+            # Reactome tools
+            "reactome": "Reactome",
+            # Rosetta tools
             "rosetta": "Rosetta",
             "pyrosetta": "Rosetta",
+            # PyMOL tools
             "pymol": "PyMOL",
             "parse_and_execute": "PyMOL",
+            # ESMFold tools
             "esmfold": "ESMFold",
             "fold": "ESMFold",
+            # ColabFold tools
+            "colabfold": "ColabFold",
+            # BLAST tools
             "blast": "BLAST",
+            # Foldseek tools
+            "foldseek": "Foldseek",
+            # MSA tools
+            "msa": "MSA",
+            "alignment": "MSA",
+            # ProteinMPNN tools
+            "proteinmpnn": "ProteinMPNN",
+            "mpnn": "ProteinMPNN",
+            # RFdiffusion tools
+            "rfdiffusion": "RFdiffusion",
+            # NetworkX tools
+            "networkx": "NetworkX",
+            "graph": "NetworkX",
+            # Pandas Analysis tools
+            "pandas": "PandasAnalysis",
+            "read_metadata": "PandasAnalysis",
+            "run_pandas_code": "PandasAnalysis",
+            "dataframe": "PandasAnalysis",
+            # Nanopore tools
+            "nanopore": "Nanopore",
+            "pod5": "Nanopore",
+            "bam": "Nanopore",
+            # Scholar tools
+            "scholar": "Scholar",
         }
 
         for pattern, server in server_mappings.items():
@@ -1711,6 +2073,22 @@ class GenerationAgent(BaseAgent):
     def _summarize_collected_data(self, collected_data: Dict[str, Any]) -> str:
         """Summarize collected data for Chain 2 prompt"""
         summary_parts = []
+
+        # === NEW: Include file paths for full data access ===
+        file_paths = collected_data.get("_file_paths", {})
+        if file_paths:
+            summary_parts.append("### Chain 1 Data Files (IMPORTANT: Full collected data)\n")
+            summary_parts.append("**⚠️ The summary below shows only PREVIEW data. For FULL data, read these files:**\n\n")
+
+            if "sources_file" in file_paths:
+                summary_parts.append(f"- **Full Collection Data**: `{file_paths['sources_file']}`\n")
+                summary_parts.append("  - Contains: Complete protein sequences, gene information, API query results\n")
+                summary_parts.append("  - Use `read_metadata_tool(file_path)` to inspect, or `run_pandas_code_tool` to load JSON\n")
+
+            if "results_file" in file_paths:
+                summary_parts.append(f"- **Analysis Results**: `{file_paths['results_file']}`\n")
+
+            summary_parts.append("\n---\n\n")
 
         for source, data in collected_data.get("sources", {}).items():
             # Special handling for input_files - show absolute paths prominently

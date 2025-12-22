@@ -34,16 +34,22 @@ class LLMClient:
         model: str = None,
         api_key: str = None,
         temperature: float = 0.7,
-        max_tokens: int = 8192  # Claude Sonnet 4.5 최대 출력 토큰
+        max_tokens: int = None  # .env의 LLM_MAX_TOKENS 또는 기본값 8192
     ):
-        # 모델 설정
+        # 모델 설정 (.env에서 읽기)
         if model:
             self.model = model
         else:
             self.model = os.getenv("LLM_MODEL", "anthropic/claude-4.5-sonnet")
-        
+
         self.temperature = temperature
-        self.max_tokens = max_tokens
+
+        # max_tokens 설정 (.env에서 읽기)
+        if max_tokens is not None:
+            self.max_tokens = max_tokens
+        else:
+            max_tokens_str = os.getenv("LLM_MAX_TOKENS", "8192").replace(",", "")
+            self.max_tokens = int(max_tokens_str)
         
         # OpenRouter API 키
         if AsyncOpenAI is None:
@@ -71,11 +77,12 @@ class LLMClient:
         max_tokens: int = None,
         purpose: str = None,
         use_cache: bool = False,  # Prompt caching 사용 여부
+        model: str = None,  # 동적 모델 선택 (None이면 기본 모델 사용)
         **kwargs
     ) -> str:
         """
         비동기 텍스트 생성
-        
+
         Args:
             messages: [{"role": "user", "content": "..."}] 형식
             system: 시스템 프롬프트
@@ -83,12 +90,14 @@ class LLMClient:
             max_tokens: 최대 토큰 수
             purpose: LLM 호출 목적 (로깅용)
             use_cache: Prompt caching 사용 (긴 컨텍스트 재사용 시 토큰 절약)
-        
+            model: 동적 모델 선택 (예: "openai/gpt-4.5-preview")
+
         Returns:
             생성된 텍스트
         """
         temp = temperature if temperature is not None else self.temperature
         max_tok = max_tokens if max_tokens is not None else self.max_tokens
+        use_model = model if model else self.model  # 동적 모델 또는 기본 모델
         
         # 메시지 포맷팅
         formatted_messages = []
@@ -97,7 +106,7 @@ class LLMClient:
         formatted_messages.extend(messages)
         
         # Prompt Caching 적용 (Claude 모델만 지원)
-        if use_cache and 'claude' in self.model.lower():
+        if use_cache and 'claude' in use_model.lower():
             # 마지막 user 메시지 이전의 모든 메시지를 캐시
             # 이렇게 하면 debate history 같은 긴 컨텍스트를 캐시에 저장
             if len(formatted_messages) >= 2:
@@ -107,19 +116,19 @@ class LLMClient:
                     "cache_control": {"type": "ephemeral"}
                 }
                 logger.info(f"[CACHE] Prompt caching enabled for message at index {len(formatted_messages)-2}")
-        
+
         try:
             response = await self.client.chat.completions.create(
-                model=self.model,
+                model=use_model,  # 동적 모델 사용
                 messages=formatted_messages,
                 temperature=temp,
                 max_tokens=max_tok,
                 **kwargs
             )
-            
+
             content = response.choices[0].message.content
             purpose_str = f"purpose={purpose}" if purpose else f"temp={temp}"
-            
+
             # 캐시 사용 정보 로그
             cache_info = ""
             if hasattr(response, 'usage'):
@@ -128,8 +137,8 @@ class LLMClient:
                     cached = getattr(usage.prompt_tokens_details, 'cached_tokens', 0)
                     if cached > 0:
                         cache_info = f" | cached={cached} tokens (↓{int(cached/usage.prompt_tokens*100)}%)"
-            
-            logger.info(f"[LLM] {self.model} | {purpose_str} | response={len(content)} chars{cache_info}")
+
+            logger.info(f"[LLM] {use_model} | {purpose_str} | response={len(content)} chars{cache_info}")
             
             return content
             
@@ -144,19 +153,21 @@ class LLMClient:
         system: str = None,
         purpose: str = None,
         use_cache: bool = False,
+        model: str = None,  # 동적 모델 선택
         **kwargs
     ) -> Dict[str, Any]:
         """
         비동기 JSON 응답 생성
-        
+
         Args:
             purpose: LLM 호출 목적 (로깅용)
             use_cache: Prompt caching 사용 (긴 debate history 등)
-        
+            model: 동적 모델 선택 (예: "openai/gpt-4.5-preview")
+
         Returns:
             파싱된 JSON 딕셔너리
         """
-        
+
         # JSON 형식 요청 힌트 추가 (더 강력하게)
         if messages:
             last_content = messages[-1].get('content', '')
@@ -166,8 +177,8 @@ class LLMClient:
                     "role": messages[-1]["role"],
                     "content": last_content + "\n\nIMPORTANT: Respond with ONLY valid JSON. Do NOT wrap in markdown code blocks (no ```json). Return raw JSON object directly."
                 }
-        
-        response = await self.generate(messages, system, purpose=purpose, use_cache=use_cache, **kwargs)
+
+        response = await self.generate(messages, system, purpose=purpose, use_cache=use_cache, model=model, **kwargs)
         
         # 빈 응답 체크
         if not response or not response.strip():
@@ -416,15 +427,23 @@ class LLMClient:
                         logger.warning(f"Skipping invalid tool_call: {tool_call}")
                         continue
 
+                    # === NEW: Enhanced logging for debugging ===
+                    tool_name = getattr(tool_call.function, 'name', 'unknown')
+                    logger.info(f"[TOOL-CALL] Tool: {tool_name}")
+                    
                     # Handle None or empty arguments
                     args_str = getattr(tool_call.function, 'arguments', None)
+                    logger.info(f"[TOOL-CALL] Raw arguments: {args_str[:300] if args_str else 'None'}")
+                    
                     if args_str:
                         try:
                             arguments = json.loads(args_str)
+                            logger.info(f"[TOOL-CALL] Parsed keys: {list(arguments.keys())}")
                         except (json.JSONDecodeError, TypeError) as e:
                             logger.warning(f"Failed to parse tool arguments: {e}, raw: {str(args_str)[:100]}")
                             arguments = {}
                     else:
+                        logger.warning(f"[TOOL-CALL] Empty or None arguments for {tool_name}")
                         arguments = {}
 
                     tool_info = {

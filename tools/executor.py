@@ -6,6 +6,11 @@ This module routes tool calls to appropriate handlers:
 2. Legacy tools -> routed to client methods (deprecated)
 
 Supports both sequential and parallel execution modes.
+
+NEW (v3.2): Automatic parameter mapping via ParameterMapper
+- No per-tool configuration required
+- Pattern-based parameter resolution from collected data
+- Schema-driven validation and type coercion
 """
 
 import asyncio
@@ -13,21 +18,24 @@ from typing import Dict, List, Any, Optional
 import logging
 import json
 
+from .parameter_mapper import ParameterMapper, create_mapper_context
+
 logger = logging.getLogger(__name__)
 
 
 class ToolExecutor:
     """
     Executes tool calls by routing to MCP servers or legacy clients
-    
+
     Architecture:
     1. LLM selects a tool via function calling
     2. ToolExecutor receives the tool name and arguments
-    3. ToolRegistry provides tool metadata (which server, etc.)
-    4. For MCP tools: route to MCPServerManager
-    5. For legacy tools: route to old client methods (deprecated)
+    3. ParameterMapper auto-fills missing parameters from context (NEW)
+    4. ToolRegistry provides tool metadata (which server, etc.)
+    5. For MCP tools: route to MCPServerManager
+    6. For legacy tools: route to old client methods (deprecated)
     """
-    
+
     def __init__(
         self,
         tool_registry,
@@ -36,7 +44,7 @@ class ToolExecutor:
     ):
         """
         Initialize tool executor
-        
+
         Args:
             tool_registry: ToolRegistry instance
             mcp_server_manager: MCPServerManager for MCP tool routing
@@ -46,6 +54,46 @@ class ToolExecutor:
         self.mcp_manager = mcp_server_manager
         self.legacy_clients = legacy_clients or {}
         self.logger = logging.getLogger(self.__class__.__name__)
+
+        # NEW: Parameter mapper for automatic argument resolution
+        self.parameter_mapper = ParameterMapper()
+
+        # NEW: Context for parameter mapping (set via set_context)
+        self._context: Dict[str, Any] = {
+            "input_files": {},
+            "collected_data": {},
+            "entity_analysis": {}
+        }
+
+    def set_context(
+        self,
+        input_files: Dict[str, Any] = None,
+        collected_data: Dict[str, Any] = None,
+        entity_analysis: Dict[str, Any] = None
+    ):
+        """
+        Set context for automatic parameter mapping.
+
+        Call this before executing tools to enable automatic
+        parameter resolution from collected data.
+
+        Args:
+            input_files: Input data files {name: {path, type, ...}}
+            collected_data: Data from Chain 1 collection
+            entity_analysis: Entity analysis from Stage 1
+        """
+        if input_files is not None:
+            self._context["input_files"] = input_files
+        if collected_data is not None:
+            self._context["collected_data"] = collected_data
+        if entity_analysis is not None:
+            self._context["entity_analysis"] = entity_analysis
+
+        self.logger.debug(
+            f"Context updated: {len(self._context['input_files'])} files, "
+            f"{len(self._context['collected_data'])} sources, "
+            f"{len(self._context.get('entity_analysis', {}).get('primary_entities', []))} entities"
+        )
     
     async def execute_tool(
         self,
@@ -53,10 +101,12 @@ class ToolExecutor:
         arguments: Dict[str, Any]
     ) -> Any:
         """
-        Execute a single tool call with automatic file-to-string conversion.
+        Execute a single tool call with automatic parameter mapping.
 
-        NEW FEATURE: If arguments contain "*_file" parameters (e.g., sequence_file),
-        automatically loads and converts to expected string format.
+        NEW FEATURES (v3.2):
+        1. Automatic parameter mapping from context (collected_data, input_files)
+        2. File path arguments (*_file) auto-converted to content
+        3. Schema-based validation with helpful error messages
 
         Args:
             tool_name: Name of the tool to execute
@@ -71,12 +121,26 @@ class ToolExecutor:
             raise ValueError(f"Unknown tool: {tool_name}")
 
         self.logger.info(f"Executing tool: {tool_name}")
+        self.logger.debug(f"  Original arguments: {list(arguments.keys())}")
 
         try:
-            # === NEW: File argument preprocessing ===
+            # === STEP 1: Automatic parameter mapping (NEW v3.2) ===
+            if self._context and any(self._context.values()):
+                arguments, warnings = self.parameter_mapper.map_parameters(
+                    tool_name=tool_name,
+                    tool_schema=tool_def.parameters,
+                    provided_args=arguments,
+                    context=self._context
+                )
+                if warnings:
+                    for warning in warnings:
+                        self.logger.warning(f"  ⚠️ {warning}")
+                self.logger.debug(f"  After mapping: {list(arguments.keys())}")
+
+            # === STEP 2: File argument preprocessing (legacy) ===
             arguments = await self._preprocess_file_arguments(tool_name, arguments)
 
-            # === NEW: Validate required parameters ===
+            # === STEP 3: Validate required parameters ===
             self._validate_required_parameters(tool_def, arguments)
 
             # Route to MCP server if available
@@ -96,17 +160,47 @@ class ToolExecutor:
     async def _execute_mcp_tool(
         self,
         tool_def,
-        arguments: Dict[str, Any]
+        arguments: Dict[str, Any],
+        max_retries: int = 3
     ) -> Any:
-        """Execute a tool via MCP server"""
+        """
+        Execute a tool via MCP server with automatic retry on transient failures.
+
+        Retry is triggered when:
+        - Server returns empty response (recovered via restart)
+        - JSON parsing fails (recovered via restart)
+        - Server connection closes unexpectedly
+        """
         if not self.mcp_manager:
             raise RuntimeError(
                 f"MCP server required for tool '{tool_def.name}' "
                 "but MCPServerManager not available"
             )
-        
+
         self.logger.debug(f"Routing to MCP server: {tool_def.server}")
-        return await self.mcp_manager.call_tool(tool_def.name, arguments)
+
+        last_error = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                result = await self.mcp_manager.call_tool(tool_def.name, arguments)
+                return result
+            except RuntimeError as e:
+                error_msg = str(e).lower()
+                # Check if this is a recoverable error (server restarted)
+                if "retry" in error_msg or "restarted" in error_msg or "empty response" in error_msg:
+                    last_error = e
+                    if attempt < max_retries:
+                        self.logger.warning(
+                            f"  ⚠️ MCP call failed (attempt {attempt}/{max_retries}): {e}"
+                        )
+                        # Wait briefly before retry to let server stabilize
+                        await asyncio.sleep(0.5 * attempt)
+                        continue
+                # Non-recoverable error, raise immediately
+                raise
+
+        # All retries exhausted
+        raise RuntimeError(f"MCP tool '{tool_def.name}' failed after {max_retries} retries: {last_error}")
     
     async def _execute_legacy_tool(
         self,

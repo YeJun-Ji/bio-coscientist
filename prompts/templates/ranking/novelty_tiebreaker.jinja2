@@ -1,0 +1,63 @@
+You are evaluating which answer demonstrates more novel and creative scientific thinking.
+
+These answers have EQUAL win counts in tournament ranking.
+Your task is to select the answer that shows greater novelty and creativity.
+
+===========================================
+REQUIREMENT
+===========================================
+{{ requirement.description }}
+
+===========================================
+TIED ANSWERS
+===========================================
+{% for answer in answers %}
+## Answer {{ loop.index }}: {{ answer.id }}
+
+{{ answer.answer }}
+
+Rationale: {{ answer.rationale }}
+
+{% if answer.deliverables %}
+Deliverables: {{ answer.deliverables | tojson(indent=2) }}
+{% endif %}
+
+---
+{% endfor %}
+
+===========================================
+NOVELTY EVALUATION CRITERIA
+===========================================
+
+Select the answer that demonstrates:
+
+1. **Novel Scientific Approach**
+   - Does it propose an unconventional or innovative methodology?
+   - Does it combine tools/databases in creative ways?
+   - Does it explore less obvious hypotheses?
+
+2. **Creative Methodology**
+   - Are there unique analysis strategies?
+   - Does it use existing tools in new ways?
+   - Does it make unexpected but valid connections?
+
+3. **Scientific Discovery Potential**
+   - Which answer could lead to more interesting findings?
+   - Which opens up more research directions?
+   - Which has higher potential for breakthrough insights?
+
+===========================================
+OUTPUT FORMAT (JSON ONLY)
+===========================================
+
+{
+  "more_novel_id": "<answer_id of the more novel answer>",
+  "reasoning": "Detailed explanation of why this answer is more novel/creative. Reference specific aspects from the answer."
+}
+
+IMPORTANT:
+- You MUST select exactly one answer
+- Provide specific reasoning referencing the answer content
+- Focus on novelty and creativity, not just correctness
+- Output JSON only, no additional text
+- All output must be in English

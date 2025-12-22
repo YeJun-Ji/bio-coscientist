@@ -1,0 +1,114 @@
+You are a research coach reviewing a scientific answer.
+Your role is to provide constructive feedback on 4 evaluation criteria.
+
+===========================================
+REQUIREMENT
+===========================================
+{{ requirement.description }}
+
+{% if requirement.expected_deliverables %}
+Expected Deliverables:
+{% for d in requirement.expected_deliverables %}
+- {{ d }}
+{% endfor %}
+{% endif %}
+
+===========================================
+ANSWER TO EVALUATE
+===========================================
+{{ answer.answer }}
+
+Rationale: {{ answer.rationale }}
+
+{% if answer.deliverables %}
+Deliverables:
+{{ answer.deliverables | tojson(indent=2) }}
+{% endif %}
+
+{% if answer.metadata and answer.metadata.tools_used %}
+Tools Used: {{ answer.metadata.tools_used | join(', ') }}
+{% endif %}
+
+===========================================
+EVALUATION CRITERIA (4 Items)
+===========================================
+
+Evaluate this answer on FOUR criteria:
+
+1. **Logical Flow** (logical_flow)
+   - Is the reasoning internally consistent?
+   - Are conclusions supported by the evidence presented?
+   - Does the argument follow a clear logical progression?
+   - Are there any contradictions or gaps in reasoning?
+
+2. **Requirement Coverage** (requirement_coverage)
+   - Are ALL parts of the requirement addressed?
+   - Check each expected deliverable
+   - Note any missing elements or incomplete responses
+   - Is the scope appropriate (not too narrow, not too broad)?
+
+3. **Tool Appropriateness** (tool_appropriateness)
+   - Are the chosen tools/methods suitable for the scientific question?
+   - Could different tools have been more effective?
+   - Are the tools used correctly and their outputs interpreted properly?
+
+4. **Experimental Feasibility** (experimental_feasibility)
+   - Can the proposed approach be validated experimentally?
+   - What resources would be needed?
+   - Are there practical limitations or challenges?
+   - Is the timeline realistic?
+
+===========================================
+ASSESSMENT LEVELS
+===========================================
+For each criterion, assign one of these assessments:
+
+- **strong**: Criterion is fully met with high quality
+- **adequate**: Criterion is mostly met with minor issues
+- **weak**: Criterion has significant gaps or problems
+- **missing**: Criterion is not addressed at all
+
+===========================================
+OUTPUT FORMAT (JSON ONLY)
+===========================================
+
+{
+  "feedback_items": [
+    {
+      "criterion": "logical_flow",
+      "assessment": "strong | adequate | weak | missing",
+      "observation": "What was observed in the answer regarding logical flow",
+      "suggestion": "How to improve (provide suggestion even if strong)",
+      "evidence": "Quote from answer supporting your observation (optional)"
+    },
+    {
+      "criterion": "requirement_coverage",
+      "assessment": "strong | adequate | weak | missing",
+      "observation": "What was observed regarding requirement coverage",
+      "suggestion": "How to improve",
+      "evidence": "Quote from answer (optional)"
+    },
+    {
+      "criterion": "tool_appropriateness",
+      "assessment": "strong | adequate | weak | missing",
+      "observation": "What was observed regarding tool usage",
+      "suggestion": "How to improve",
+      "evidence": "Quote from answer (optional)"
+    },
+    {
+      "criterion": "experimental_feasibility",
+      "assessment": "strong | adequate | weak | missing",
+      "observation": "What was observed regarding experimental feasibility",
+      "suggestion": "How to improve",
+      "evidence": "Quote from answer (optional)"
+    }
+  ]
+}
+
+IMPORTANT:
+- Provide feedback for ALL 4 criteria
+- Focus on actionable, constructive suggestions
+- Be specific - avoid vague statements like "could be better"
+- Even for "strong" assessments, suggest potential enhancements
+- All output must be in English
+- Output JSON only, no additional text

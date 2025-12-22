@@ -1,9 +1,9 @@
 """
-Evaluation Result Data Structures for v5.0 Three-Agent Pipeline
+Evaluation Result Data Structures for v6.0 Phase Pipeline
 
 This module defines data structures for:
-- Reflection Agent: ActionableFeedback, ReflectionResult
-- Tournament Ranking Agent: Matchup, TournamentResult
+- Reflection Agent: FeedbackItem, ReflectionResult (4-criteria qualitative feedback)
+- Tournament Ranking Agent: Matchup, TournamentResult (win-count based)
 - Evolution Agent: ProtocolModule, LiteratureModule, RiskModule, EnrichmentResult
 """
 
@@ -13,63 +13,32 @@ from datetime import datetime
 
 
 # ============================================================================
-# Reflection Agent Data Structures
+# Reflection Agent Data Structures (v6.0 - Qualitative Feedback)
 # ============================================================================
 
 @dataclass
-class ActionableFeedback:
+class FeedbackItem:
     """
-    Actionable feedback from Reflection Agent (Coach-style).
+    Single feedback item for one of the 4 evaluation criteria.
 
-    Example:
-        BAD: "Constraint violation."
-        GOOD: "Config requires residues 50-60, but answer includes residue 70.
-               Fix: Re-run docking constrained to 50-60 range."
+    Criteria:
+    - logical_flow: Is the reasoning internally consistent?
+    - requirement_coverage: Are all parts of the requirement addressed?
+    - tool_appropriateness: Are the tools used appropriate for the task?
+    - experimental_feasibility: Can the proposed approach be validated experimentally?
     """
-    issue_type: str  # "constraint_violation", "evidence_gap", "logical_error", "improvement"
-    location: str  # "binding site section", "BLAST analysis", etc.
-    problem: str  # What's wrong or could be improved
-    fix_instruction: str  # How to fix (CRITICAL - must be specific)
-    priority: str  # "critical", "important", "minor"
+    criterion: str  # "logical_flow", "requirement_coverage", "tool_appropriateness", "experimental_feasibility"
+    assessment: str  # "strong", "adequate", "weak", "missing"
+    observation: str  # What was observed in the answer
+    suggestion: str  # How to improve (even if strong)
+    evidence: Optional[str] = None  # Quote from answer (optional)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "issue_type": self.issue_type,
-            "location": self.location,
-            "problem": self.problem,
-            "fix_instruction": self.fix_instruction,
-            "priority": self.priority
-        }
-
-
-@dataclass
-class QualityMetrics:
-    """Quality assessment metrics from Reflection Agent."""
-    evidence_alignment: float  # 0.0-1.0
-    constraint_satisfaction: float  # 0.0-1.0
-    logical_completeness: float  # 0.0-1.0
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "evidence_alignment": self.evidence_alignment,
-            "constraint_satisfaction": self.constraint_satisfaction,
-            "logical_completeness": self.logical_completeness
-        }
-
-
-@dataclass
-class Violation:
-    """Detailed violation information."""
-    type: str  # "hallucination", "constraint_violation", "logic_gap", "missing_deliverable"
-    severity: str  # "critical", "major", "minor"
-    description: str
-    evidence: Optional[str] = None  # Supporting evidence
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "type": self.type,
-            "severity": self.severity,
-            "description": self.description,
+            "criterion": self.criterion,
+            "assessment": self.assessment,
+            "observation": self.observation,
+            "suggestion": self.suggestion,
             "evidence": self.evidence
         }
 
@@ -77,40 +46,51 @@ class Violation:
 @dataclass
 class ReflectionResult:
     """
-    Result from Reflection Agent evaluation.
+    Result from Reflection Agent evaluation (v6.0).
 
-    NO "status" or "iteration" fields since there's no feedback loop.
+    Provides qualitative feedback on 4 criteria without numerical scores.
+    Used for user feedback and report generation (as warnings/notes).
     """
-    overall_score: float  # verification*0.4 + quality*0.6 (0.0-1.0)
-    actionable_feedback: List[ActionableFeedback]
-    violations: List[Violation]
-    quality_metrics: QualityMetrics
-    verification_score: float  # From LogVerificationAgent
+    feedback_items: List[FeedbackItem]  # 4 criteria feedback
     timestamp: datetime = field(default_factory=datetime.now)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "overall_score": self.overall_score,
-            "actionable_feedback": [f.to_dict() for f in self.actionable_feedback],
-            "violations": [v.to_dict() for v in self.violations],
-            "quality_metrics": self.quality_metrics.to_dict(),
-            "verification_score": self.verification_score,
+            "feedback_items": [f.to_dict() for f in self.feedback_items],
             "timestamp": self.timestamp.isoformat()
         }
 
+    def get_criterion(self, name: str) -> Optional[FeedbackItem]:
+        """Get feedback for a specific criterion."""
+        for item in self.feedback_items:
+            if item.criterion == name:
+                return item
+        return None
+
+    def get_weak_criteria(self) -> List[FeedbackItem]:
+        """Get all criteria with weak or missing assessment."""
+        return [f for f in self.feedback_items if f.assessment in ("weak", "missing")]
+
+    def has_critical_issues(self) -> bool:
+        """Check if any criterion has missing assessment."""
+        return any(f.assessment == "missing" for f in self.feedback_items)
+
 
 # ============================================================================
-# Tournament Ranking Agent Data Structures
+# Tournament Ranking Agent Data Structures (v6.0 - Win-count based)
 # ============================================================================
 
 @dataclass
 class Matchup:
-    """Single pairwise comparison in tournament."""
+    """
+    Single pairwise comparison in tournament (v6.0 simplified).
+
+    No criteria_scores - just winner decision with reasoning.
+    """
     answer_a_id: str
     answer_b_id: str
     winner_id: str
-    reasoning: str  # LLM's detailed comparison reasoning
-    criteria_scores: Dict[str, Dict[str, float]]  # {goal_contribution: {a: 0.8, b: 0.6}, ...}
+    reasoning: str  # LLM's comparison reasoning
     margin: str  # "clear", "close", "very_close"
 
     def to_dict(self) -> Dict[str, Any]:
@@ -119,36 +99,35 @@ class Matchup:
             "answer_b_id": self.answer_b_id,
             "winner_id": self.winner_id,
             "reasoning": self.reasoning,
-            "criteria_scores": self.criteria_scores,
             "margin": self.margin
         }
 
 
 @dataclass
 class TournamentResult:
-    """Result from tournament-based ranking."""
+    """
+    Result from tournament-based ranking (v6.0).
+
+    Uses pure win-count for ranking, no ELO.
+    """
     final_rank: int  # 1, 2, 3...
-    elo_rating: float  # Updated ELO (backward compatible)
     matchups: List[Matchup]  # All matchups this answer participated in
     wins: int
     losses: int
-    strengths: List[str]  # Why this answer ranked well
-    weaknesses: List[str]  # Areas for improvement
+    is_novelty_winner: bool = False  # True if won via novelty tiebreaker
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "final_rank": self.final_rank,
-            "elo_rating": self.elo_rating,
             "matchups": [m.to_dict() for m in self.matchups],
             "wins": self.wins,
             "losses": self.losses,
-            "strengths": self.strengths,
-            "weaknesses": self.weaknesses
+            "is_novelty_winner": self.is_novelty_winner
         }
 
 
 # ============================================================================
-# Evolution Agent Data Structures
+# Evolution Agent Data Structures (Retained for future use)
 # ============================================================================
 
 @dataclass
@@ -272,6 +251,7 @@ class EnrichmentResult:
     Result from Evolution Agent's three parallel modules.
 
     IMPORTANT: Only applied to the SINGLE CONFIRMED ANSWER (tournament winner).
+    Currently returns None (v6.0 - disabled, for future use).
     """
     protocol: Optional[ProtocolModule]
     literature: Optional[LiteratureModule]

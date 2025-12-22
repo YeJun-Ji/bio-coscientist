@@ -16,6 +16,8 @@ import subprocess
 from typing import List, Dict, Any
 import logging
 
+from ..server_templates import install_server_template
+
 logger = logging.getLogger(__name__)
 
 
@@ -59,7 +61,7 @@ class ProteinMPNNServer:
 
     @staticmethod
     def install():
-        """Install ProteinMPNN MCP server"""
+        """Install ProteinMPNN MCP server from template"""
         install_path = ProteinMPNNServer.get_install_path()
         model_path = ProteinMPNNServer.get_model_path()
 
@@ -67,24 +69,26 @@ class ProteinMPNNServer:
             logger.info(f"ProteinMPNN server already installed at {install_path}")
             return
 
-        logger.info(f"Installing ProteinMPNN server at {install_path}")
+        logger.info(f"Installing ProteinMPNN server to {install_path}")
 
+        # Create directories
         os.makedirs(install_path, exist_ok=True)
         os.makedirs(model_path, exist_ok=True)
 
-        requirements_path = os.path.join(install_path, "requirements.txt")
-        if not os.path.exists(requirements_path):
-            with open(requirements_path, "w") as f:
-                f.write("torch>=2.0.0\n")
-                f.write("numpy>=1.24.0\n")
-                f.write("biopython>=1.81\n")
-                f.write("mcp>=0.1.0\n")
+        # Install server.py from template
+        server_path = os.path.join(install_path, "server.py")
+        if not os.path.exists(server_path):
+            if not install_server_template("proteinmpnn", install_path):
+                raise RuntimeError("Failed to install ProteinMPNN server template")
+            logger.info("✅ Installed server.py from template")
 
+        # Create venv and install dependencies
         venv_path = os.path.join(install_path, ".venv")
+        venv_python = os.path.join(venv_path, "bin", "python")
+        uv_path = os.path.expanduser("~/.local/bin/uv")
+
         if not os.path.exists(venv_path):
             logger.info("Creating virtual environment...")
-            uv_path = os.path.expanduser("~/.local/bin/uv")
-
             subprocess.run(
                 [uv_path, "venv", "--python", "3.10", ".venv"],
                 cwd=install_path,
@@ -92,15 +96,14 @@ class ProteinMPNNServer:
                 capture_output=True
             )
 
-            uv_path = os.path.expanduser("~/.local/bin/uv")
-        venv_python = os.path.join(venv_path, "bin", "python")
+        # Install dependencies using uv pip
         logger.info("Installing dependencies...")
         subprocess.run(
-            [uv_path, "pip", "install", "--python", venv_python, "-r", requirements_path],
-                cwd=install_path,
-                check=True,
-                capture_output=True
-            )
+            [uv_path, "pip", "install", "--python", venv_python, "mcp", "torch", "numpy", "biopython"],
+            cwd=install_path,
+            check=True,
+            capture_output=True
+        )
 
         logger.info("✅ ProteinMPNN server setup complete")
         logger.info(f"Note: Download model weights to {model_path}")

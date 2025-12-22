@@ -22,31 +22,31 @@ from ..memory import ContextMemory
 from ..mcp import MCPServerManager
 from .configuration_agent import ConfigurationAgent
 from .generation_agent import GenerationAgent
-from .log_verification_agent import LogVerificationAgent
-# v5.0: New agents replace old evaluation pipeline
+# v6.0: Simplified evaluation pipeline
 from .reflection_coach_agent import ReflectionCoachAgent
 from .tournament_ranking_agent import TournamentRankingAgent
 from .evolution_architect_agent import EvolutionArchitectAgent
-# Deprecated (v4.0): Keep imports for backward compatibility warnings
-from .quality_assessment_agent import QualityAssessmentAgent  # DEPRECATED v5.0
-from .ranking_agent import RankingAgent  # DEPRECATED v5.0
-from .evolution_agent import EvolutionAgent  # DEPRECATED v5.0, use EvolutionArchitectAgent
 
 
 class SupervisorAgent:
     """
-    Sequential Confirmation Research Orchestrator
+    Sequential Confirmation Research Orchestrator (v6.0)
 
     Architecture (RequirementAnswer-based):
     1. Configuration Phase: Parse research goal → Requirements with dependencies
     2. Execution Order: Topological sort of Requirements
     3. For each Requirement Group (parallel within, sequential between):
        - Generate N diverse RequirementAnswers
-       - Reflect (evaluate) each answer
-       - Rank answers via ELO tournament
-       - Evolve if not converged
-       - Confirm best answer
+       - [PARALLEL] Reflection (4-criteria feedback) + Tournament (pairwise ranking)
+       - Confirm best answer (winner from tournament)
+       - Evolution (PASS - disabled in v6.0)
     4. Final: Assemble confirmed answers into research solution
+
+    v6.0 Changes:
+    - Removed Phase 1 (Pre-Check)
+    - Reflection + Tournament run in parallel
+    - ELO removed, pure win-count ranking
+    - Evolution disabled (returns None)
     """
     
     def __init__(self, config: Dict[str, Any]):
@@ -73,7 +73,8 @@ class SupervisorAgent:
         self.memory = ContextMemory(config.get("storage_path", "./research_memory"))
         self.logger.info(f"✅ Context Memory initialized")
 
-        # Track background enrichment tasks (v3.0)
+        # v6.0: Background enrichment disabled (Evolution PASS mode)
+        # Retained for future use
         self.enrichment_tasks = []
 
         # Set RAs directory for config export
@@ -400,24 +401,15 @@ class SupervisorAgent:
 
             self.logger.info(f"✅ Group {group_idx + 1} complete")
 
-        # All requirements confirmed - now wait for background enrichments
+        # All requirements confirmed
         self.logger.info("\n" + "=" * 80)
         self.logger.info("✅ ALL REQUIREMENTS CONFIRMED")
         self.logger.info(f"Total confirmed answers: {len(self.memory.confirmed_answers)}")
         self.logger.info("=" * 80)
 
-        if self.enrichment_tasks:
-            self.logger.info(f"\n🔬 Waiting for {len(self.enrichment_tasks)} background enrichments to complete...")
-            enrichment_start = asyncio.get_event_loop().time()
-
-            # Gather all enrichment results (already running in background)
-            await asyncio.gather(*self.enrichment_tasks, return_exceptions=True)
-
-            enrichment_duration = asyncio.get_event_loop().time() - enrichment_start
-            self.logger.info(f"✓ All enrichments complete ({enrichment_duration:.1f}s)")
-
+        # v6.0: Evolution disabled, no enrichment tasks to wait for
         self.logger.info("\n" + "=" * 80)
-        self.logger.info("✅ SEQUENTIAL CONFIRMATION COMPLETE (with enrichments)")
+        self.logger.info("✅ SEQUENTIAL CONFIRMATION COMPLETE")
         self.logger.info("=" * 80)
 #
     async def _process_single_requirement(
@@ -425,21 +417,21 @@ class SupervisorAgent:
         requirement: Dict[str, Any],
         context: Dict[str, RequirementAnswer],
         generation_agent: GenerationAgent,
-        evolution_agent: EvolutionArchitectAgent  # v5.0: Changed from EvolutionAgent
+        evolution_agent: EvolutionArchitectAgent
     ):
         """
-        Process a single requirement: Generate → [Absolute + Relative Evaluation] → (Evolve) → Confirm
+        Process a single requirement (v6.0):
+        Generate → [Reflection + Tournament PARALLEL] → Confirm → Evolution (PASS)
 
         This is the core loop for each requirement in Sequential Confirmation.
-        Evaluation agents are created inside this method for parallel execution.
+        Reflection and Tournament run in parallel for efficiency.
         """
         req_id = requirement.get("requirement_id", requirement.get("step_id", "unknown"))
         req_title = requirement.get("title", "")
 
         self.logger.info(f"\n  ▶ Processing Requirement {req_id}: {req_title[:40]}...")
 
-        # v3.0 Simplified Workflow: Generate → Evaluate → Converge/Confirm
-        # No multi-iteration loops - quality_score from single evaluation determines outcome
+        # v6.0 Simplified Workflow: Generate → [Reflect + Rank] → Confirm
 
         # Step 1: Generation - Create N diverse answers
         self.logger.info(f"    1️⃣ Generating diverse answers...")
@@ -456,11 +448,7 @@ class SupervisorAgent:
 
         self.logger.info(f"    ✓ Generated {len(gen_result.get('answers', []))} answers")
 
-        # Step 2-5: v5.0 Simplified Evaluation Pipeline
-        # PHASE 1: Pre-Check (Fast-Fail - KEEP)
-        # PHASE 2: Reflection (NEW - Review + Feedback, NO regeneration)
-        # PHASE 3: Tournament (NEW - Relative evaluation)
-        # PHASE 4: Evolution (NEW - Enrich confirmed winner only)
+        # Get generated answers from memory
         answers = self.memory.get_answers_for_requirement(req_id)
         generated_answers = [a for a in answers if a.status in ["generated", "reviewed"]]
 
@@ -468,17 +456,7 @@ class SupervisorAgent:
             self.logger.error(f"    ✗ No answers to evaluate")
             raise RuntimeError(f"Failed to generate any answers for requirement {req_id}")
 
-        # Create agents for v5.0 pipeline
-        from .log_verification_agent import LogVerificationAgent
-        from .reflection_coach_agent import ReflectionCoachAgent
-        from .tournament_ranking_agent import TournamentRankingAgent
-
-        log_verifier = LogVerificationAgent(
-            memory=self.memory,
-            config=self.research_config,
-            llm_client=self.llm_client,
-            experiment_dir=self.config.get("session_dir")
-        )
+        # Create agents for v6.0 pipeline
         reflection_agent = ReflectionCoachAgent(
             memory=self.memory,
             config=self.research_config,
@@ -490,127 +468,107 @@ class SupervisorAgent:
             llm_client=self.llm_client
         )
 
-        # PHASE 1: Pre-Check (Fast-Fail, <0.5s each - UNCHANGED)
-        self.logger.info(f"    2️⃣ PHASE 1: Pre-Check (fast-fail)...")
-        valid_answers = []
-        for answer in generated_answers:
-            try:
-                is_valid = log_verifier.pre_check(answer, req_id, self.config.get("session_dir"))
-                if is_valid:
-                    valid_answers.append(answer)
-                else:
-                    self.logger.warning(f"    │  ✗ {answer.id[:8]}... rejected in pre-check")
-            except Exception as e:
-                self.logger.warning(f"    │  ✗ {answer.id[:8]}... pre-check failed: {e}")
+        # v6.0: PARALLEL Reflection + Tournament
+        self.logger.info(f"    2️⃣ Running Reflection + Tournament (PARALLEL)...")
 
-        if not valid_answers:
-            self.logger.error(f"    ✗ All answers failed pre-check")
-            raise RuntimeError(f"All answers failed pre-check for requirement {req_id}")
-
-        self.logger.info(f"    ✓ {len(valid_answers)}/{len(generated_answers)} answers passed pre-check")
-
-        # PHASE 2: Reflection (NEW - Review all answers, NO regeneration)
-        self.logger.info(f"    3️⃣ PHASE 2: Reflection (coach-style review)...")
-
-        # Reflect on each answer (can be parallel)
-        reflection_tasks = []
-        for answer in valid_answers:
-            # Get verification results first
-            verification = log_verifier.verify(answer, req_id, self.config.get("session_dir"))
-            # Create reflection task
-            task = reflection_agent.reflect_on_answer(
-                answer=answer,
-                requirement=requirement,
-                verification_results=verification if not isinstance(verification, Exception) else {},
-                config=self.research_config
+        # Create parallel tasks
+        reflection_task = asyncio.create_task(
+            self._run_reflection_for_all(reflection_agent, generated_answers, requirement)
+        )
+        tournament_task = asyncio.create_task(
+            tournament_ranker.run_tournament(
+                answers=generated_answers,
+                requirement=requirement
             )
-            reflection_tasks.append((answer, task))
-
-        # Wait for all reflections
-        for answer, task in reflection_tasks:
-            try:
-                reflection_result = await task
-                answer.metadata["reflection"] = reflection_result.to_dict()
-                answer.quality_score = reflection_result.overall_score
-                answer.verification_score = reflection_result.verification_score
-                self.memory.store_requirement_answer(answer)  # Update with reflection metadata
-                self.logger.info(
-                    f"    │  ✓ {answer.id[:8]}...: score={reflection_result.overall_score:.3f} "
-                    f"(feedback items: {len(reflection_result.actionable_feedback)})"
-                )
-            except Exception as e:
-                self.logger.error(f"    │  ✗ Reflection failed for {answer.id[:8]}...: {e}")
-                answer.quality_score = 0.5  # Fallback
-
-        scores = [a.quality_score for a in valid_answers]
-        self.logger.info(f"    ✓ Reflection complete: scores = {[f'{s:.2f}' for s in scores]}")
-
-        # Check if all scores are very low
-        if all(s < 0.5 for s in scores):
-            self.logger.warning(
-                f"    ⚠️ All answers have low quality scores (< 0.5). "
-                f"Proceeding with tournament, but results may be unreliable."
-            )
-
-        # PHASE 3: Tournament (NEW - Rank ALL valid answers)
-        self.logger.info(f"    4️⃣ PHASE 3: Tournament Ranking...")
-        tournament_result = await tournament_ranker.run_tournament(
-            answers=valid_answers,
-            requirement=requirement
         )
 
+        # Wait for both to complete
+        reflection_results, tournament_result = await asyncio.gather(
+            reflection_task, tournament_task
+        )
+
+        # Attach reflection results to answers
+        for answer in generated_answers:
+            if answer.id in reflection_results:
+                answer.metadata["reflection"] = reflection_results[answer.id].to_dict()
+                # Log feedback summary
+                weak_criteria = reflection_results[answer.id].get_weak_criteria()
+                self.logger.info(
+                    f"    │  ✓ {answer.id[:8]}...: "
+                    f"{len(reflection_results[answer.id].feedback_items)} feedback items, "
+                    f"{len(weak_criteria)} weak/missing"
+                )
+                self.memory.store_requirement_answer(answer)
+
+        # Get ranked answers from tournament
         ranked_answers = tournament_result["ranked_answers"]
         self.logger.info(
             f"    ✓ Tournament complete. Rankings: "
-            f"{[(a.id[:8] + '...', a.tournament_rank, f'{a.elo_rating:.0f}') for a in ranked_answers[:3]]}"
+            f"""{[(a.id[:8] + '...', a.tournament_rank, f'wins={getattr(a, "wins", 0)}') for a in ranked_answers[:3]]}"""
         )
 
-        # Step 4: Get best answer from tournament
+        # Get best answer from tournament
         best_answer = ranked_answers[0] if ranked_answers else None
 
         if not best_answer:
             self.logger.error(f"    ✗ No answers available from tournament")
             raise RuntimeError(f"No answers available for requirement {req_id}")
 
-        # Show detailed convergence status
+        # Show confirmation status
         expected = requirement.get("expected_deliverables", [])
         actual = best_answer.deliverables if isinstance(best_answer.deliverables, dict) else {}
         deliverables_ratio = len(actual) / max(len(expected), 1)
 
-        converged = self._check_answer_convergence(best_answer, requirement)
+        # Check if won via novelty tiebreaker
+        is_novelty_winner = best_answer.metadata.get("is_novelty_winner", False)
+        novelty_note = " (won by novelty)" if is_novelty_winner else ""
 
-        if converged:
-            self.logger.info(
-                f"    ✅ CONVERGED - Confirming answer\n"
-                f"       Quality: {best_answer.quality_score:.2f} (threshold: 0.7) ✓\n"
-                f"       Deliverables: {deliverables_ratio:.1%} (threshold: 80%) ✓\n"
-                f"       Best answer: {best_answer.id} (ELO: {best_answer.elo_rating:.1f})"
-            )
-        else:
-            self.logger.info(
-                f"    ⚠️ NOT CONVERGED - Confirming best available answer\n"
-                f"       Quality: {best_answer.quality_score:.2f} (threshold: 0.7) {'✓' if best_answer.quality_score >= 0.7 else '✗'}\n"
-                f"       Deliverables: {deliverables_ratio:.1%} (threshold: 80%) {'✓' if deliverables_ratio >= 0.8 else '✗'}\n"
-                f"       Best answer: {best_answer.id} (ELO: {best_answer.elo_rating:.1f})"
-            )
+        self.logger.info(
+            f"    ✅ Confirming best answer{novelty_note}\n"
+            f"       Winner: {best_answer.id[:16]}...\n"
+            f"       Wins: {getattr(best_answer, 'wins', 'N/A')}, "
+            f"Losses: {getattr(best_answer, 'losses', 'N/A')}\n"
+            f"       Deliverables: {deliverables_ratio:.1%}"
+        )
 
-        # Confirm the best answer (regardless of convergence - v3.0 always confirms)
+        # Confirm the best answer
         self.memory.confirm_answer(best_answer.id)
 
-        # Post-confirmation enrichment (v3.0) - RUN IN BACKGROUND
-        # Don't await! Let next group start immediately.
-        self.logger.info(f"    🔬 Starting post-confirmation enrichment (background)...")
-        enrichment_task = asyncio.create_task(
-            self._run_enrichment_background(
-                answer=best_answer,
-                requirement=requirement,
-                context=context,
-                evolution_agent=evolution_agent,
-                req_id=req_id
-            )
-        )
-        self.enrichment_tasks.append(enrichment_task)
-        self.logger.info(f"    ↻ Enrichment running in background (not blocking next group)")
+        # v6.0: Evolution Phase (PASS - disabled)
+        self.logger.info(f"    3️⃣ Evolution Phase: PASS (v6.0 - disabled)")
+        # No enrichment task - evolution_agent.enrich_confirmed_answer() returns None immediately
+
+    async def _run_reflection_for_all(
+        self,
+        reflection_agent: ReflectionCoachAgent,
+        answers: List[RequirementAnswer],
+        requirement: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Run reflection on all answers in parallel.
+
+        Args:
+            reflection_agent: ReflectionCoachAgent instance
+            answers: List of answers to reflect on
+            requirement: Requirement specification
+
+        Returns:
+            Dict mapping answer_id -> ReflectionResult
+        """
+        tasks = [
+            reflection_agent.reflect_on_answer(answer, requirement)
+            for answer in answers
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        reflection_results = {}
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                self.logger.warning(f"    │  ✗ Reflection failed for {answers[i].id[:8]}...: {result}")
+            else:
+                reflection_results[answers[i].id] = result
+
+        return reflection_results
 
     async def _run_enrichment_background(
         self,
@@ -673,30 +631,19 @@ class SupervisorAgent:
         requirement: Dict[str, Any]
     ) -> bool:
         """
-        Check if an answer meets convergence criteria (v3.0: Quality-Score Based).
+        Check if an answer meets convergence criteria (v6.0: Simplified).
 
-        NEW (v3.0): Primary convergence is based on QUALITY_SCORE from AbsoluteEvaluationAgent.
-        ELO rating is used for RANKING only, not convergence.
+        v6.0 Changes:
+        - No quality_score (Reflection provides feedback, not scores)
+        - No ELO rating (Tournament uses win-count)
+        - Convergence is based only on deliverables coverage
 
-        Criteria (read from execution_plan.convergence):
-        1. Quality score >= min_quality_score (PRIMARY - from 4-lens absolute evaluation)
-        2. Delivers >= deliverables_ratio of expected deliverables
-        3. ELO rating >= min_elo_rating (OPTIONAL - disabled by default in v3.0)
-
-        The v3.0 philosophy: Quality is absolute (via tool/completeness/interpretability/consistency lenses),
-        ranking is relative (via pairwise ELO). Use quality for convergence, ELO for selection.
+        In v6.0, the best answer from tournament is always confirmed.
+        This method is kept for backward compatibility but simplified.
         """
-        # Read convergence criteria from execution_plan (v3.0 config)
+        # Read convergence criteria from execution_plan
         conv_config = self.research_config.get("execution_plan", {}).get("convergence", {})
-        quality_threshold = conv_config.get("min_quality_score", 0.7)
         deliverables_threshold = conv_config.get("deliverables_ratio", 0.8)
-
-        # ELO threshold now OPTIONAL (set to 0 to disable ELO-based convergence)
-        elo_threshold = conv_config.get("min_elo_rating", 0)  # Default: 0 (disabled)
-        use_elo_for_convergence = elo_threshold > 0
-
-        # Check quality score (PRIMARY)
-        quality_ok = answer.quality_score >= quality_threshold
 
         # Check deliverables coverage
         expected = requirement.get("expected_deliverables", [])
@@ -704,26 +651,7 @@ class SupervisorAgent:
         deliverables_ratio = len(actual) / max(len(expected), 1)
         deliverables_ok = deliverables_ratio >= deliverables_threshold
 
-        # Check ELO (OPTIONAL - only if explicitly enabled)
-        elo_ok = True  # Default: pass
-        if use_elo_for_convergence:
-            elo_ok = answer.elo_rating >= elo_threshold
-
-        # Converged if quality AND deliverables are met (ELO optional)
-        converged = quality_ok and deliverables_ok and elo_ok
-
-        if not converged:
-            debug_msg = (
-                f"    Convergence check: quality={answer.quality_score:.2f}>={quality_threshold} ({quality_ok}), "
-                f"deliverables={deliverables_ratio:.1%}>={deliverables_threshold:.0%} ({deliverables_ok})"
-            )
-            if use_elo_for_convergence:
-                debug_msg += f", elo={answer.elo_rating:.1f}>={elo_threshold} ({elo_ok})"
-            else:
-                debug_msg += f", elo={answer.elo_rating:.1f} (not used for convergence)"
-            self.logger.debug(debug_msg)
-
-        return converged
+        return deliverables_ok
 #
     def _build_requirements_map(self, parsed_problem: Dict[str, Any]) -> Dict[str, Dict]:
         """Build a map of requirement_id -> requirement dict"""
@@ -802,7 +730,7 @@ class SupervisorAgent:
         return execution_order
 
     async def _finalize_sequential_research(self) -> Dict[str, Any]:
-        """Finalize Sequential Confirmation research and generate results."""
+        """Finalize Sequential Confirmation research and generate results (v6.0)."""
         self.logger.info("-" * 80)
         self.logger.info("📊 PHASE 2: FINALIZATION")
         self.logger.info("-" * 80)
@@ -810,34 +738,32 @@ class SupervisorAgent:
         # Collect all confirmed answers
         confirmed = self.memory.get_all_confirmed_answers()
 
-        # Build final solution
+        # Build final solution (v6.0: no ELO, use wins/losses)
         final_solution = {}
         for req_id, answer in confirmed.items():
             final_solution[req_id] = {
                 "requirement_id": req_id,
-                "requirement_title": answer.requirement_title,
+                "requirement_title": getattr(answer, "requirement_title", ""),
                 "answer": answer.answer,
                 "rationale": answer.rationale,
                 "deliverables": answer.deliverables,
-                "confidence": answer.confidence,
-                "elo_rating": answer.elo_rating,
-                "quality_score": answer.quality_score,
-                "iteration": answer.iteration
+                "confidence": getattr(answer, "confidence", 0.0),
+                "wins": getattr(answer, "wins", 0),
+                "losses": getattr(answer, "losses", 0),
+                "tournament_rank": getattr(answer, "tournament_rank", 1),
+                "is_novelty_winner": answer.metadata.get("is_novelty_winner", False),
+                "reflection": answer.metadata.get("reflection", {})
             }
 
-        # Calculate overall stats
+        # Calculate overall stats (v6.0: no quality/ELO averages)
         total_answers = len(self.memory.requirement_answers)
         confirmed_count = len(confirmed)
-        avg_quality = sum(a.quality_score for a in confirmed.values()) / max(confirmed_count, 1)
-        avg_elo = sum(a.elo_rating for a in confirmed.values()) / max(confirmed_count, 1)
 
         duration = (datetime.now() - self.start_time).total_seconds()
 
         self.logger.info(f"✅ Research Complete:")
         self.logger.info(f"   - Requirements answered: {confirmed_count}")
         self.logger.info(f"   - Total answers generated: {total_answers}")
-        self.logger.info(f"   - Average quality: {avg_quality:.2f}")
-        self.logger.info(f"   - Average ELO: {avg_elo:.1f}")
         self.logger.info(f"   - Duration: {duration:.1f}s")
 
         return {
@@ -847,12 +773,11 @@ class SupervisorAgent:
             "statistics": {
                 "total_requirements": len(final_solution),
                 "total_answers_generated": total_answers,
-                "average_quality": avg_quality,
-                "average_elo": avg_elo,
                 "duration_seconds": duration
             },
             "metadata": {
                 "start_time": self.start_time.isoformat(),
-                "end_time": datetime.now().isoformat()
+                "end_time": datetime.now().isoformat(),
+                "version": "v6.0"
             }
         }

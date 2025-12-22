@@ -1,26 +1,28 @@
 {#
 requirement_analysis.jinja2
 
-Stage 1: Problem-Agnostic Requirement Entity Analysis
+Stage 1: Requirement Type Classification and Strategy Planning
 
-This template guides LLM to extract entities, data requirements, and analysis needs
-from a research requirement, considering context from previously confirmed answers.
+This template guides LLM to:
+1. Classify requirement type (input_only, collection_required, synthesis)
+2. Generate chain1_strategy (data collection plan)
+3. Generate chain2_strategy (analysis plan)
 
 INPUT VARIABLES:
-- requirement: Dict with requirement_id, title, description, expected_deliverables
+- requirement: Dict with requirement_id, title, description, expected_deliverables, depends_on
 - context: Dict[requirement_id, RequirementAnswer] - confirmed answers from dependencies
-- research_goal: ResearchGoal - global context (fallback only)
+- research_goal: ResearchGoal - global context including input_files
+- experiment_dir: str - path to save collected/analyzed data
 #}
 
-You are an expert biomedical research analyst specializing in entity extraction and research planning.
+You are an expert biomedical research analyst specializing in research workflow planning.
 
 **IMPORTANT: ALL output MUST be in English.**
 
-Your task is to analyze a research requirement and extract:
-1. **Primary Entities** - biological/chemical entities mentioned in the requirement
-2. **Data Requirements** - what data sources are needed
-3. **Analysis Needs** - what computational analyses are required
-4. **Context Refinements** - how previous answers refine this requirement
+Your task is to analyze a research requirement and plan the execution strategy:
+1. **Requirement Type** - classify as input_only, collection_required, or synthesis
+2. **Chain 1 Strategy** - data collection plan (or skip if input_only/synthesis)
+3. **Chain 2 Strategy** - data analysis plan with specific tools
 
 ================================================================================
 REQUIREMENT TO ANALYZE
@@ -39,188 +41,111 @@ REQUIREMENT TO ANALYZE
 {% endfor %}
 {% endif %}
 
+{% if requirement.depends_on %}
+**Depends On**: {{ requirement.depends_on | join(", ") }}
+{% endif %}
+
+{% if research_goal and research_goal.input_files %}
+================================================================================
+INPUT DATA FILES
+================================================================================
+
+The following input files are available for analysis:
+{% for file in research_goal.input_files %}
+- **{{ file.path }}** ({{ file.type }}){% if file.label %} - {{ file.label }}{% endif %}
+
+{% endfor %}
+{% endif %}
+
 {% if context %}
 ================================================================================
 CONTEXT FROM DEPENDENCY REQUIREMENTS
 ================================================================================
 
-The following requirements have been completed and their answers provide context
-for the current requirement. Extract refinements from their deliverables.
+The following requirements have been completed. Their results are saved as files:
 
 {% for dep_id, dep_answer in context.items() %}
 ---
-**Dependency {{ dep_id }}**:
+**Requirement {{ dep_id }}** (Completed):
 {{ dep_answer.answer|truncate(300) }}
 
-**Deliverables**:
-{{ dep_answer.deliverables|tojson(indent=2) }}
+**Result File**: {{ experiment_dir }}/data/req_{{ dep_id }}/analysis/results.json
 
 {% endfor %}
 {% endif %}
 
-{% if research_goal %}
+{% if experiment_dir %}
 ================================================================================
-GLOBAL RESEARCH GOAL (FALLBACK CONTEXT ONLY)
+DATA STORAGE PATHS
 ================================================================================
 
-{{ research_goal.description }}
+**Experiment Directory**: {{ experiment_dir }}
 
-**NOTE**: Use this only as general context. Focus on the requirement and context above.
+- Collection data: {{ experiment_dir }}/data/req_{{ requirement.requirement_id }}/collection/sources.json
+- Analysis results: {{ experiment_dir }}/data/req_{{ requirement.requirement_id }}/analysis/results.json
+
+{% for dep_id in requirement.depends_on or [] %}
+- Dependency {{ dep_id }} results: {{ experiment_dir }}/data/req_{{ dep_id }}/analysis/results.json
+{% endfor %}
 {% endif %}
 
 ================================================================================
-ENTITY TYPES REFERENCE
+REQUIREMENT TYPE CLASSIFICATION
 ================================================================================
 
-Identify entities in the requirement description and context. Support these types:
+Classify the requirement into ONE of these three types:
 
-| Entity Type | Indicators | Example Databases | Examples |
-|-------------|------------|-------------------|----------|
-| **protein** | protein, receptor, enzyme, antibody, kinase | UniProt, PDB | TNFR1, ACE2, Spike protein, IL-6R |
-| **gene** | gene, allele, mutation, expression, transcript | NCBI Gene, KEGG | BRCA1, TP53, EGFR, MYC |
-| **pathway** | pathway, signaling, cascade, network | KEGG Pathway, Reactome | MAPK signaling, Glycolysis, Apoptosis |
-| **compound** | compound, drug, molecule, ligand, inhibitor | KEGG Compound, PubChem | Aspirin, ATP, Glucose, Metformin |
-| **disease** | disease, disorder, syndrome, condition | KEGG Disease, NCBI | Alzheimer's, Cancer, Diabetes, COVID-19 |
-| **domain** | domain, region, motif, site, residue | UniProt, PDB | CRD2-CRD3, RBD, kinase domain, binding site |
-| **organism** | species, strain, cell line, tissue | NCBI Taxonomy, KEGG | Homo sapiens, E. coli, HeLa cells, liver tissue |
-| **assay** | assay, experiment, measurement, readout | ChEMBL, PubChem BioAssay | IC50, binding affinity, cell viability |
+| Type | Description | Chain 1 | Chain 2 |
+|------|-------------|---------|---------|
+| **input_only** | Analysis can be done entirely from provided input files (CSV, BAM, POD5, etc.) | Skip (no external collection) | Analyze input files directly |
+| **collection_required** | Need to collect data from external databases (UniProt, KEGG, STRING, etc.) | Collect from external DBs → Save to JSON | Analyze collected JSON files |
+| **synthesis** | Integrate results from multiple previous requirements | Skip (use previous result files) | Load and integrate previous results |
 
-**Classification Guidelines**:
-- An entity can have multiple types (e.g., "BRCA1 gene" is both gene and protein)
-- Prioritize the type most relevant to the requirement
-- Extract both broad entities (TNFR1) and specific regions (CRD2-CRD3)
-- Use context deliverables to identify refined entities
+**Classification Rules**:
+1. If input files (CSV, BAM, POD5, FASTA) are provided AND the requirement can be answered using them → `input_only`
+2. If requires external database lookups (protein info, pathway data, PPI networks) → `collection_required`
+3. If depends_on other requirements AND primarily integrates their results → `synthesis`
 
 ================================================================================
-TOOL SELECTION REFERENCE
+FILE TYPE → TOOL MAPPING
 ================================================================================
 
-Use this reference to generate `tool_guidance` based on entity types and analysis needs:
+## Input File Analysis Tools (Chain 2)
 
-## Data Collection Tools (by entity type)
+| File Type | Extension | Recommended Tools |
+|-----------|-----------|-------------------|
+| **CSV** | .csv | `pandas_analysis.read_metadata_tool`, `pandas_analysis.run_pandas_code_tool` |
+| **BAM** | .bam | `nanopore.get_alignment_stats`, `nanopore.analyze_polya_lengths`, `nanopore.compare_polya_distributions` |
+| **POD5** | .pod5 | `nanopore.read_pod5_info`, `nanopore.detect_modified_bases`, `nanopore.analyze_polya_signal` |
+| **PDB** | .pdb | `rosetta.calculate_energy`, `rosetta.dock_proteins`, `vina.dock_ligand` |
+| **FASTA** | .fasta, .fa | `blast.find_similar_proteins`, `msa.align_sequences`, `msa.calculate_conservation` |
+| **JSON** (collected) | .json | `pandas_analysis.run_pandas_code_tool` (use json.load) |
 
-| Entity Type | Primary Tools | Use When |
-|-------------|---------------|----------|
-| **protein** | uniprot.get_protein_info, rcsbpdb.download_pdb | Need sequence, structure, annotations |
-| **gene** | ncbi.get_gene_info, kegg.get_gene_info | Need gene details, expression, orthologs |
-| **pathway** | kegg.get_pathway_info, gprofiler.enrichment_analysis | Need pathway components, enrichment |
-| **compound** | kegg.get_compound_info, chembl.get_compound_activities | Need drug data, bioactivities |
-| **disease** | kegg.get_disease_info, opentargets.get_disease_associations | Need disease-gene/pathway links |
-| **domain** | interpro.analyze_domains, interpro.get_domain_architecture | Need domain structure, boundaries |
-| **interaction** | stringdb.get_protein_network, stringdb.get_interaction_partners | Need PPI data, interactors |
+## External Collection Tools (Chain 1)
 
-## Analysis Tools (by analysis need)
+| Data Type | Server | Tool | Arguments (REQUIRED) | Use Case |
+|-----------|--------|------|----------------------|----------|
+| Protein info | uniprot | `get_protein_info` | `{"accession": "P19438"}` | Protein sequence, function |
+| Protein search | uniprot | `search_by_gene` | `{"gene_name": "TNFR1", "organism": "9606"}` | Find UniProt ID by gene |
+| Protein structure | rcsbpdb | `download_pdb` | `{"pdb_id": "1NCF"}` | 3D structure for docking |
+| Domain info | interpro | `analyze_domains` | `{"uniprot_id": "P19438"}` | Domain boundaries, motifs |
+| Pathway info | kegg | `get_pathway_info` | `{"pathway_id": "hsa04668"}` | Pathway components |
+| PPI network | stringdb | `get_protein_network` | `{"proteins": ["TNFRSF1A"], "species": 9606}` | Protein interactions |
+| Literature | ncbi | `search_pubmed` | `{"query": "TNFR1 binding site", "max_results": 20}` | Research papers |
+| Sequence similarity | blast | `blastp` | `{"sequence": "MKTAY...", "database": "nr"}` | Find similar proteins |
 
-| Analysis Need | Primary Tools | Secondary Tools |
-|---------------|---------------|-----------------|
-| **network_analysis** | networkx.build_network, networkx.find_hub_proteins | stringdb.get_enrichment_analysis |
-| **pathway_enrichment** | gprofiler.enrichment_analysis, kegg.get_pathway_info | stringdb.get_enrichment_analysis |
-| **structure_prediction** | esmfold.predict_structure, colabfold.predict_structure | rcsbpdb.download_pdb (if known) |
-| **binder_design** | rfdiffusion.design_binder, proteinmpnn.design_sequence | colabfold.predict_binder_complex |
-| **docking** | vina.dock_ligand, rosetta.dock_proteins | rcsbpdb.get_binding_sites |
-| **immunogenicity** | iedb.scan_protein, iedb.predict_mhc_binding | N/A |
-| **druggability** | opentargets.assess_druggability, chembl.get_bioactivities | opentargets.search_target_drugs |
-| **homology_search** | blast.find_similar_proteins, foldseek.search_structure | msa.align_sequences |
-| **conservation** | msa.align_sequences, msa.calculate_conservation | blast.find_similar_proteins |
+## Analysis/Design Tools (Chain 2)
 
-## Tool Selection Guidelines
-
-1. **Match entity type** → Select collection tools from the entity type table
-2. **Match analysis need** → Select analysis tools from the analysis need table
-3. **Consider data flow**:
-   - STRING data → can feed into NetworkX
-   - PDB structure → required for Rosetta/Vina docking
-   - Sequence → required for ESMFold/BLAST/MSA
-   - Binder backbone (RFdiffusion) → needs ProteinMPNN for sequence design
-4. **GPU requirements**:
-   - ColabFold (24GB+), RFdiffusion (16GB+), ProteinMPNN (8GB+) require GPU
-   - Consider ESMFold as CPU alternative for structure prediction
-
-================================================================================
-EXTRACTION GUIDELINES
-================================================================================
-
-## 1. PRIMARY ENTITIES
-
-Extract all biological/chemical entities mentioned in:
-- Requirement description (PRIMARY SOURCE)
-- Context deliverables (REFINEMENT SOURCE)
-- Research goal (FALLBACK)
-
-For each entity, provide:
-- **type**: One of the entity types above
-- **name**: The entity name/identifier
-- **description**: Brief description of the entity's role in this requirement
-- **identifiers**: Known IDs (e.g., UniProt ID, KEGG ID, PDB ID) if mentioned
-- **source**: "requirement" or "context" or "research_goal"
-- **priority**: "required" (must have) | "recommended" (should have) | "optional" (nice to have)
-
-**Example**:
-```json
-{
-  "type": "protein",
-  "name": "TNFR1",
-  "description": "Target protein for mini-binder design",
-  "identifiers": {"uniprot": "P19438"},
-  "source": "requirement",
-  "priority": "required"
-}
-```
-
-## 2. DATA REQUIREMENTS
-
-Based on entities and expected deliverables, determine what data is needed.
-
-For each data requirement, provide:
-- **type**: "sequence" | "structure" | "pathway" | "interaction" | "literature" | "expression" | "variant" | "binding_affinity" | "mutation_effect" | "taxonomy"
-- **source**: Preferred database (e.g., "uniprot", "pdb", "kegg", "ncbi", "pubmed", "chembl", "clinvar")
-- **priority**: "required" | "recommended" | "optional"
-- **reason**: Brief explanation of why this data is needed
-
-**Example**:
-```json
-{
-  "type": "structure",
-  "source": "pdb",
-  "priority": "required",
-  "reason": "Need 3D structure of TNFR1 for binding site analysis"
-}
-```
-
-## 3. ANALYSIS NEEDS
-
-Based on the requirement and expected deliverables, identify computational analyses needed.
-
-Common analysis types:
-- **binding_energy**: Calculate interaction energy (Rosetta)
-- **docking**: Protein-protein or protein-ligand docking (Rosetta, AutoDock)
-- **structure_prediction**: Predict 3D structure (ESMFold, AlphaFold)
-- **homology_search**: Find similar sequences (BLAST)
-- **conservation_analysis**: Analyze evolutionary conservation
-- **pathway_enrichment**: Identify enriched pathways (KEGG)
-- **visualization**: Visualize structures or pathways (PyMOL)
-
-Return as list of strings: `["binding_energy", "docking", ...]`
-
-## 4. CONTEXT REFINEMENTS
-
-Extract specific refinements from context deliverables that focus the current requirement.
-
-**Examples**:
-- Context deliverable: `{"binding_site": "CRD2-CRD3", "critical_residues": ["R31", "K35"]}`
-  → Refinement: Focus data collection on CRD2-CRD3 domain, not entire protein
-
-- Context deliverable: `{"pathway": "MAPK/ERK", "key_proteins": ["MEK1", "ERK2"]}`
-  → Refinement: Prioritize MEK1 and ERK2 in pathway analysis
-
-Return as dict mapping refinement keys to values:
-```json
-{
-  "binding_site": "CRD2-CRD3",
-  "critical_residues": ["R31", "K35", "D43"],
-  "focus_region": "amino acids 30-50"
-}
-```
+| Analysis Type | Server | Tool | Arguments (REQUIRED) | Purpose |
+|---------------|--------|------|----------------------|---------|
+| Structure prediction | esmfold | `predict_structure` | `{"sequence": "MKTAYIAK..."}` | Predict 3D structure from sequence |
+| Binder design | rfdiffusion | `design_binder` | `{"target_pdb": "target.pdb", "hotspot_residues": [45,46,47]}` | Design protein binders |
+| Sequence design | proteinmpnn | `design_sequence` | `{"pdb_path": "backbone.pdb", "chain": "A"}` | Design sequences for backbone |
+| Docking | vina | `dock_ligand` | `{"receptor_pdb": "receptor.pdb", "ligand_pdb": "ligand.pdb"}` | Small molecule docking |
+| Protein docking | rosetta | `dock_proteins` | `{"receptor": "receptor.pdb", "ligand": "binder.pdb"}` | Protein-protein docking |
+| Energy calculation | rosetta | `calculate_energy` | `{"pdb_path": "complex.pdb"}` | Calculate binding energy |
+| Network analysis | networkx | `build_network` | `{"edges_file": "ppi_data.json"}` | PPI network analysis |
+| Off-target search | blast | `blastp` | `{"sequence": "binder_seq", "database": "human_proteome"}` | Find off-target proteins |
 
 ================================================================================
 OUTPUT FORMAT (STRICT JSON)
@@ -230,53 +155,66 @@ Return ONLY valid JSON in this exact format:
 
 ```json
 {
-  "primary_entities": [
+  "requirement_type": "input_only | collection_required | synthesis",
+  "rationale": "Brief explanation of why this requirement type was chosen",
+
+  "input_files": [
     {
-      "type": "protein|gene|pathway|compound|disease|domain",
-      "name": "Entity name",
-      "description": "Brief description of role in this requirement",
-      "identifiers": {
-        "database_name": "identifier"
-      },
-      "source": "requirement|context|research_goal",
-      "priority": "required|recommended|optional"
+      "path": "path/to/file.csv",
+      "type": "csv",
+      "label": "optional label"
     }
   ],
-  "data_requirements": [
-    {
-      "type": "sequence|structure|pathway|interaction|literature|expression|variant",
-      "source": "uniprot|pdb|kegg|ncbi|pubmed|reactome|...",
-      "priority": "required|recommended|optional",
-      "reason": "Why this data is needed"
-    }
-  ],
-  "analysis_needs": [
-    "binding_energy",
-    "docking",
-    "structure_prediction",
-    "..."
-  ],
-  "context_refinements": {
-    "refinement_key": "refinement_value",
-    "...": "..."
-  },
-  "tool_guidance": {
-    "collection_tools": [
+
+  "chain1_strategy": {
+    "skip_collection": true,
+    "rationale": "Why collection is skipped or needed",
+    "tools": [
       {
         "server": "server_name",
         "tool": "tool_name",
-        "purpose": "Brief description of why this tool is needed",
-        "for_entity": "entity_name"
+        "arguments": {
+          "arg1": "value1"
+        },
+        "purpose": "Why this tool is needed",
+        "required": true
       }
     ],
-    "analysis_tools": [
+    "save_to": "path/to/collection/sources.json"
+  },
+
+  "chain2_strategy": {
+    "analysis_type": "correlation | comparison | integration | network | structure | ...",
+    "rationale": "Why this analysis approach is needed",
+    "tools": [
       {
         "server": "server_name",
         "tool": "tool_name",
-        "purpose": "Brief description of why this tool is needed"
+        "arguments": {
+          "arg1": "value1"
+        },
+        "code_hint": "optional Python code hint for pandas_analysis",
+        "purpose": "Why this tool is needed",
+        "required": true
       }
-    ]
-  }
+    ],
+    "multi_step": [
+      {"step": 1, "description": "First step description"},
+      {"step": 2, "description": "Second step description"}
+    ],
+    "input_files": ["path/to/input1.json", "path/to/input2.csv"],
+    "save_to": "path/to/analysis/results.json"
+  },
+
+  "expected_outputs": [
+    "output_name_1",
+    "output_name_2"
+  ],
+
+  "entity_names": [
+    {"type": "gene", "name": "Entity name for logging"},
+    {"type": "protein", "name": "Another entity"}
+  ]
 }
 ```
 
@@ -284,207 +222,862 @@ Return ONLY valid JSON in this exact format:
 EXAMPLE OUTPUTS
 ================================================================================
 
-**NOTE**: The examples below illustrate the OUTPUT FORMAT and STRUCTURE only.
-The specific entities (TNFR1, MAPK, ACE2, etc.) are just examples - apply the same
-pattern to whatever entities appear in YOUR actual requirement.
+**Example 1: Expression-Based Similarity (input_only + CSV)**
 
-**Example 1: Protein Design (with context)**
-
-Requirement: "Design mini-protein binder targeting TNFR1 CRD2-CRD3 domain"
-Context: {"1": {"deliverables": {"binding_site": "CRD2-CRD3", "critical_residues": ["R31", "K35"]}}}
+Requirement: "Generate expression-based similarity scores between genes"
+Input Files: [{"path": "data/expression.csv", "type": "csv"}]
 
 Output:
 ```json
 {
-  "primary_entities": [
-    {
-      "type": "protein",
-      "name": "TNFR1",
-      "description": "Target protein for mini-binder design",
-      "identifiers": {"uniprot": "P19438"},
-      "source": "requirement",
-      "priority": "required"
-    },
-    {
-      "type": "domain",
-      "name": "CRD2-CRD3",
-      "description": "Specific binding domain on TNFR1",
-      "identifiers": {},
-      "source": "context",
-      "priority": "required"
-    }
+  "requirement_type": "input_only",
+  "rationale": "Expression data is provided as CSV file, can compute correlation directly",
+
+  "input_files": [
+    {"path": "data/expression.csv", "type": "csv", "label": "gene expression matrix"}
   ],
-  "data_requirements": [
-    {
-      "type": "structure",
-      "source": "pdb",
-      "priority": "required",
-      "reason": "Need TNFR1 3D structure for CRD2-CRD3 domain analysis"
-    },
-    {
-      "type": "sequence",
-      "source": "uniprot",
-      "priority": "required",
-      "reason": "Need TNFR1 sequence to identify CRD2-CRD3 residues"
-    }
-  ],
-  "analysis_needs": ["binder_design", "structure_prediction", "docking"],
-  "context_refinements": {
-    "binding_site": "CRD2-CRD3",
-    "critical_residues": ["R31", "K35"]
+
+  "chain1_strategy": {
+    "skip_collection": true,
+    "rationale": "Input CSV file contains all expression data needed",
+    "tools": [],
+    "save_to": null
   },
-  "tool_guidance": {
-    "collection_tools": [
-      {"server": "uniprot", "tool": "get_protein_info", "purpose": "Get TNFR1 sequence and annotations", "for_entity": "TNFR1"},
-      {"server": "rcsbpdb", "tool": "download_pdb", "purpose": "Get TNFR1 3D structure for binder design", "for_entity": "TNFR1"},
-      {"server": "interpro", "tool": "get_domain_architecture", "purpose": "Identify CRD2-CRD3 domain boundaries", "for_entity": "CRD2-CRD3"}
+
+  "chain2_strategy": {
+    "analysis_type": "correlation",
+    "rationale": "Compute Pearson correlation between gene expression profiles",
+    "tools": [
+      {
+        "server": "pandas_analysis",
+        "tool": "read_metadata_tool",
+        "arguments": {"file_path": "data/expression.csv"},
+        "purpose": "Check CSV structure and columns",
+        "required": true
+      },
+      {
+        "server": "pandas_analysis",
+        "tool": "run_pandas_code_tool",
+        "arguments": {},
+        "code_hint": "import pandas as pd; df = pd.read_csv('data/expression.csv', index_col=0); corr_matrix = df.T.corr(); top_pairs = corr_matrix.stack().sort_values(ascending=False)",
+        "purpose": "Calculate gene-gene correlation matrix",
+        "required": true
+      }
     ],
-    "analysis_tools": [
-      {"server": "rfdiffusion", "tool": "design_binder", "purpose": "Generate binder backbone targeting CRD2-CRD3"},
-      {"server": "proteinmpnn", "tool": "design_sequence", "purpose": "Design sequence for binder backbone"},
-      {"server": "colabfold", "tool": "predict_binder_complex", "purpose": "Validate binder-target complex structure"}
-    ]
-  }
+    "multi_step": [
+      {"step": 1, "description": "Load CSV and transpose to genes x samples"},
+      {"step": 2, "description": "Calculate Pearson correlation matrix"},
+      {"step": 3, "description": "Extract top similar gene pairs"}
+    ],
+    "input_files": ["data/expression.csv"],
+    "save_to": "{{ experiment_dir }}/data/req_{{ requirement.requirement_id }}/analysis/results.json"
+  },
+
+  "expected_outputs": ["correlation_matrix", "top_gene_pairs"],
+
+  "entity_names": [
+    {"type": "gene", "name": "Top expressed genes"},
+    {"type": "organism", "name": "Resting T cells"}
+  ]
 }
 ```
 
-**Example 2: Pathway/Network Analysis (IL-11 Inhibitor Discovery)**
+**Example 2: poly(A) Tail Comparison (input_only + multiple BAM files)**
 
-Requirement: "Identify IL-11 pathway interactors and potential inhibitor targets"
+Requirement: "Compare poly(A) tail lengths between knockout and wildtype samples"
+Input Files: [{"path": "ko.bam", "type": "bam", "label": "knockout"}, {"path": "wt.bam", "type": "bam", "label": "wildtype"}]
 
 Output:
 ```json
 {
-  "primary_entities": [
-    {
-      "type": "protein",
-      "name": "IL-11",
-      "description": "Target cytokine for inhibitor discovery",
-      "identifiers": {"uniprot": "P20809"},
-      "source": "requirement",
-      "priority": "required"
-    },
-    {
-      "type": "pathway",
-      "name": "IL-11/JAK-STAT signaling",
-      "description": "Signaling pathway to analyze for drug targets",
-      "identifiers": {"kegg": "hsa04630"},
-      "source": "requirement",
-      "priority": "required"
-    }
+  "requirement_type": "input_only",
+  "rationale": "BAM files are provided for both samples, can analyze poly(A) directly",
+
+  "input_files": [
+    {"path": "ko.bam", "type": "bam", "label": "knockout"},
+    {"path": "wt.bam", "type": "bam", "label": "wildtype"}
   ],
-  "data_requirements": [
-    {
-      "type": "interaction",
-      "source": "stringdb",
-      "priority": "required",
-      "reason": "Need IL-11 protein-protein interaction network"
-    },
-    {
-      "type": "pathway",
-      "source": "kegg",
-      "priority": "required",
-      "reason": "Need JAK-STAT pathway components and hierarchy"
-    }
-  ],
-  "analysis_needs": ["network_analysis", "pathway_enrichment", "druggability"],
-  "context_refinements": {},
-  "tool_guidance": {
-    "collection_tools": [
-      {"server": "stringdb", "tool": "get_protein_network", "purpose": "Get IL-11 interaction network", "for_entity": "IL-11"},
-      {"server": "stringdb", "tool": "get_interaction_partners", "purpose": "Identify IL-11 interactors", "for_entity": "IL-11"},
-      {"server": "kegg", "tool": "get_pathway_info", "purpose": "Get JAK-STAT pathway details", "for_entity": "IL-11/JAK-STAT signaling"}
+
+  "chain1_strategy": {
+    "skip_collection": true,
+    "rationale": "BAM files contain all read data needed for poly(A) analysis",
+    "tools": [],
+    "save_to": null
+  },
+
+  "chain2_strategy": {
+    "analysis_type": "comparison",
+    "rationale": "Compare poly(A) length distributions between two samples",
+    "tools": [
+      {
+        "server": "nanopore",
+        "tool": "analyze_polya_lengths",
+        "arguments": {"bam_path": "ko.bam"},
+        "purpose": "Analyze poly(A) lengths in knockout sample",
+        "required": true
+      },
+      {
+        "server": "nanopore",
+        "tool": "analyze_polya_lengths",
+        "arguments": {"bam_path": "wt.bam"},
+        "purpose": "Analyze poly(A) lengths in wildtype sample",
+        "required": true
+      },
+      {
+        "server": "nanopore",
+        "tool": "compare_polya_distributions",
+        "arguments": {"bam_files": ["ko.bam", "wt.bam"], "labels": ["knockout", "wildtype"]},
+        "purpose": "Statistical comparison of poly(A) distributions",
+        "required": true
+      }
     ],
-    "analysis_tools": [
-      {"server": "networkx", "tool": "build_network", "purpose": "Build PPI network from STRING data"},
-      {"server": "networkx", "tool": "find_hub_proteins", "purpose": "Identify key hub proteins as drug targets"},
-      {"server": "gprofiler", "tool": "enrichment_analysis", "purpose": "Pathway enrichment of network components"},
-      {"server": "opentargets", "tool": "assess_druggability", "purpose": "Evaluate druggability of hub proteins"}
-    ]
-  }
+    "multi_step": [
+      {"step": 1, "description": "Analyze poly(A) for each sample"},
+      {"step": 2, "description": "Compare distributions with KS-test"},
+      {"step": 3, "description": "Identify genes with significant differences"}
+    ],
+    "input_files": ["ko.bam", "wt.bam"],
+    "save_to": "{{ experiment_dir }}/data/req_{{ requirement.requirement_id }}/analysis/results.json"
+  },
+
+  "expected_outputs": ["polya_stats_ko", "polya_stats_wt", "differential_genes"],
+
+  "entity_names": [
+    {"type": "gene", "name": "Differentially regulated genes"},
+    {"type": "organism", "name": "HEK293T cells"}
+  ]
 }
 ```
 
-**Example 3: Drug Discovery**
+**Example 3: Protein Structure Similarity (collection_required)**
 
-Requirement: "Screen compounds targeting ACE2-RBD interaction"
+Requirement: "Generate protein structure similarity scores for top 300 genes"
+Input Files: [{"path": "data/genelist.csv", "type": "csv"}]
 
 Output:
 ```json
 {
-  "primary_entities": [
-    {
-      "type": "protein",
-      "name": "ACE2",
-      "description": "Host receptor protein",
-      "identifiers": {"uniprot": "Q9BYF1"},
-      "source": "requirement",
-      "priority": "required"
-    },
-    {
-      "type": "domain",
-      "name": "RBD",
-      "description": "Receptor binding domain (viral spike protein)",
-      "identifiers": {},
-      "source": "requirement",
-      "priority": "required"
-    },
-    {
-      "type": "compound",
-      "name": "screening library",
-      "description": "Compounds to screen against ACE2-RBD",
-      "identifiers": {},
-      "source": "requirement",
-      "priority": "required"
-    }
+  "requirement_type": "collection_required",
+  "rationale": "Need to collect protein domain/structure info from InterPro and UniProt",
+
+  "input_files": [
+    {"path": "data/genelist.csv", "type": "csv", "label": "gene list"}
   ],
-  "data_requirements": [
-    {
-      "type": "structure",
-      "source": "pdb",
-      "priority": "required",
-      "reason": "Need ACE2-RBD complex structure for docking"
-    },
-    {
-      "type": "compound",
-      "source": "chembl",
-      "priority": "required",
-      "reason": "ChEMBL compounds with known bioactivity for screening"
-    }
-  ],
-  "analysis_needs": ["docking", "binding_affinity", "druggability"],
-  "context_refinements": {},
-  "tool_guidance": {
-    "collection_tools": [
-      {"server": "rcsbpdb", "tool": "download_pdb", "purpose": "Get ACE2-RBD complex structure", "for_entity": "ACE2"},
-      {"server": "rcsbpdb", "tool": "get_binding_sites", "purpose": "Identify binding site for docking", "for_entity": "ACE2"},
-      {"server": "chembl", "tool": "get_target_bioactivities", "purpose": "Get known active compounds", "for_entity": "ACE2"}
+
+  "chain1_strategy": {
+    "skip_collection": false,
+    "rationale": "Need to fetch protein domain architectures from InterPro for similarity comparison",
+    "tools": [
+      {
+        "server": "pandas_analysis",
+        "tool": "read_metadata_tool",
+        "arguments": {"file_path": "data/genelist.csv"},
+        "purpose": "Get gene names from input file",
+        "required": true
+      },
+      {
+        "server": "uniprot",
+        "tool": "search_genes",
+        "arguments": {"query": "gene_name", "organism_code": "mmu"},
+        "purpose": "Get UniProt IDs for each gene",
+        "required": true
+      },
+      {
+        "server": "interpro",
+        "tool": "analyze_domains",
+        "arguments": {"protein_id": "uniprot_id"},
+        "purpose": "Get domain architecture for each protein",
+        "required": true
+      }
     ],
-    "analysis_tools": [
-      {"server": "vina", "tool": "dock_ligand", "purpose": "Dock compounds to ACE2-RBD interface"},
-      {"server": "vina", "tool": "calculate_binding_affinity", "purpose": "Rank compounds by affinity"},
-      {"server": "opentargets", "tool": "search_target_drugs", "purpose": "Find existing drugs targeting ACE2"}
-    ]
-  }
+    "save_to": "{{ experiment_dir }}/data/req_{{ requirement.requirement_id }}/collection/sources.json"
+  },
+
+  "chain2_strategy": {
+    "analysis_type": "structure_similarity",
+    "rationale": "Compare domain architectures to calculate structural similarity",
+    "tools": [
+      {
+        "server": "pandas_analysis",
+        "tool": "run_pandas_code_tool",
+        "arguments": {},
+        "code_hint": "Load domain data from JSON, calculate Jaccard similarity of domain sets",
+        "purpose": "Calculate domain-based similarity matrix",
+        "required": true
+      },
+      {
+        "server": "foldseek",
+        "tool": "search_structure",
+        "arguments": {"structure": "predicted_structure"},
+        "purpose": "Find structural homologs for top proteins",
+        "required": false
+      }
+    ],
+    "multi_step": [
+      {"step": 1, "description": "Load collected domain data"},
+      {"step": 2, "description": "Calculate domain Jaccard similarity"},
+      {"step": 3, "description": "Generate similarity matrix"}
+    ],
+    "input_files": ["{{ experiment_dir }}/data/req_{{ requirement.requirement_id }}/collection/sources.json"],
+    "save_to": "{{ experiment_dir }}/data/req_{{ requirement.requirement_id }}/analysis/results.json"
+  },
+
+  "expected_outputs": ["domain_data", "similarity_matrix"],
+
+  "entity_names": [
+    {"type": "protein", "name": "Top 300 gene proteins"},
+    {"type": "domain", "name": "Protein domains and motifs"}
+  ]
 }
 ```
+
+**Example 4: Synthesis - Integrating Multiple Requirement Results (synthesis)**
+
+Requirement: "Present key gene pairs with integrated similarity scores from function, expression, and structure"
+Depends On: ["1", "2", "3"] (previous requirement results)
+
+Output:
+```json
+{
+  "requirement_type": "synthesis",
+  "rationale": "This requirement integrates results from requirements 1, 2, and 3",
+
+  "input_files": [],
+
+  "chain1_strategy": {
+    "skip_collection": true,
+    "rationale": "Synthesis uses previous requirement results stored as files, no new collection needed",
+    "tools": [],
+    "save_to": null
+  },
+
+  "chain2_strategy": {
+    "analysis_type": "integration",
+    "rationale": "Load previous results from JSON files and compute integrated similarity",
+    "depends_on": ["1", "2", "3"],
+    "input_result_files": [
+      "{{ experiment_dir }}/data/req_1/analysis/results.json",
+      "{{ experiment_dir }}/data/req_2/analysis/results.json",
+      "{{ experiment_dir }}/data/req_3/analysis/results.json"
+    ],
+    "tools": [
+      {
+        "server": "pandas_analysis",
+        "tool": "run_pandas_code_tool",
+        "arguments": {},
+        "code_hint": "import pandas as pd; r1 = pd.read_json('req_1/analysis/results.json'); r2 = pd.read_json('req_2/analysis/results.json'); r3 = pd.read_json('req_3/analysis/results.json'); merged = r1.merge(r2, on='gene_pair').merge(r3, on='gene_pair'); merged['integrated_score'] = 0.3*merged['score_x'] + 0.3*merged['score_y'] + 0.4*merged['score']",
+        "purpose": "Load all previous results and compute integrated similarity",
+        "required": true
+      }
+    ],
+    "multi_step": [
+      {"step": 1, "description": "Load requirement 1 results (function summary)"},
+      {"step": 2, "description": "Load requirement 2 results (phylogenetic)"},
+      {"step": 3, "description": "Load requirement 3 results (expression)"},
+      {"step": 4, "description": "Compute weighted integrated similarity"},
+      {"step": 5, "description": "Rank and select top gene pairs"}
+    ],
+    "input_files": [
+      "{{ experiment_dir }}/data/req_1/analysis/results.json",
+      "{{ experiment_dir }}/data/req_2/analysis/results.json",
+      "{{ experiment_dir }}/data/req_3/analysis/results.json"
+    ],
+    "save_to": "{{ experiment_dir }}/data/req_{{ requirement.requirement_id }}/analysis/results.json"
+  },
+
+  "expected_outputs": ["integrated_similarity_scores", "top_gene_pairs", "gene_pair_rankings"],
+
+  "entity_names": [
+    {"type": "gene", "name": "Key gene pairs for resting T cell regulation"}
+  ]
+}
+```
+
+**Example 5: PPI Network Analysis (collection_required)**
+
+Requirement: "Identify hub proteins in the T cell signaling network"
+
+Output:
+```json
+{
+  "requirement_type": "collection_required",
+  "rationale": "Need to collect PPI network data from STRING database",
+
+  "input_files": [],
+
+  "chain1_strategy": {
+    "skip_collection": false,
+    "rationale": "Need to fetch protein-protein interaction data from STRING",
+    "tools": [
+      {
+        "server": "stringdb",
+        "tool": "get_protein_network",
+        "arguments": {"proteins": ["CD3E", "CD4", "LCK", "ZAP70"], "species": 9606, "score_threshold": 400},
+        "purpose": "Get T cell signaling protein network",
+        "required": true
+      },
+      {
+        "server": "stringdb",
+        "tool": "get_interaction_partners",
+        "arguments": {"protein": "CD3E", "limit": 50},
+        "purpose": "Expand network with CD3E interactors",
+        "required": true
+      }
+    ],
+    "save_to": "{{ experiment_dir }}/data/req_{{ requirement.requirement_id }}/collection/sources.json"
+  },
+
+  "chain2_strategy": {
+    "analysis_type": "network",
+    "rationale": "Build and analyze network to find hub proteins",
+    "tools": [
+      {
+        "server": "networkx",
+        "tool": "build_network",
+        "arguments": {"edges_file": "collected_ppi_data.json"},
+        "purpose": "Build NetworkX graph from STRING data",
+        "required": true
+      },
+      {
+        "server": "networkx",
+        "tool": "find_hub_proteins",
+        "arguments": {"top_n": 10},
+        "purpose": "Identify top 10 hub proteins by degree centrality",
+        "required": true
+      }
+    ],
+    "multi_step": [
+      {"step": 1, "description": "Load collected PPI data"},
+      {"step": 2, "description": "Build network graph"},
+      {"step": 3, "description": "Calculate centrality metrics"},
+      {"step": 4, "description": "Identify hub proteins"}
+    ],
+    "input_files": ["{{ experiment_dir }}/data/req_{{ requirement.requirement_id }}/collection/sources.json"],
+    "save_to": "{{ experiment_dir }}/data/req_{{ requirement.requirement_id }}/analysis/results.json"
+  },
+
+  "expected_outputs": ["network_graph", "hub_proteins", "centrality_scores"],
+
+  "entity_names": [
+    {"type": "protein", "name": "T cell signaling proteins"},
+    {"type": "pathway", "name": "T cell receptor signaling"}
+  ]
+}
+```
+
+**Example 6: Modified Base Detection (input_only + POD5)**
+
+Requirement: "Detect m6A modifications in the POD5 sequencing data"
+Input Files: [{"path": "data/reads.pod5", "type": "pod5"}]
+
+Output:
+```json
+{
+  "requirement_type": "input_only",
+  "rationale": "POD5 file contains raw signal data for modified base detection",
+
+  "input_files": [
+    {"path": "data/reads.pod5", "type": "pod5", "label": "nanopore reads"}
+  ],
+
+  "chain1_strategy": {
+    "skip_collection": true,
+    "rationale": "POD5 file contains all signal data needed",
+    "tools": [],
+    "save_to": null
+  },
+
+  "chain2_strategy": {
+    "analysis_type": "modification_detection",
+    "rationale": "Use nanopore tools to detect m6A modifications from raw signal",
+    "tools": [
+      {
+        "server": "nanopore",
+        "tool": "read_pod5_info",
+        "arguments": {"pod5_path": "data/reads.pod5"},
+        "purpose": "Check POD5 file structure and read count",
+        "required": true
+      },
+      {
+        "server": "nanopore",
+        "tool": "detect_modified_bases",
+        "arguments": {"pod5_path": "data/reads.pod5", "modification_type": "m6A"},
+        "purpose": "Detect m6A modifications from raw signal",
+        "required": true
+      }
+    ],
+    "multi_step": [
+      {"step": 1, "description": "Validate POD5 file"},
+      {"step": 2, "description": "Run modification detection model"},
+      {"step": 3, "description": "Aggregate per-gene modification rates"}
+    ],
+    "input_files": ["data/reads.pod5"],
+    "save_to": "{{ experiment_dir }}/data/req_{{ requirement.requirement_id }}/analysis/results.json"
+  },
+
+  "expected_outputs": ["modification_calls", "per_gene_m6a_rates"],
+
+  "entity_names": [
+    {"type": "gene", "name": "Modified genes"},
+    {"type": "organism", "name": "Sample cells"}
+  ]
+}
+```
+
+**Example 7: Receptor Binding Site Selection (collection_required)**
+
+Requirement: "Select TNFR1/2 binding site for binder design"
+
+Output:
+```json
+{
+  "requirement_type": "collection_required",
+  "rationale": "Need to collect receptor structure and domain information from PDB, UniProt, and InterPro to identify binding sites",
+
+  "input_files": [],
+
+  "chain1_strategy": {
+    "skip_collection": false,
+    "rationale": "Collect TNFR1/TNFR2 structural and functional data for binding site analysis",
+    "tools": [
+      {
+        "server": "uniprot",
+        "tool": "get_protein_info",
+        "arguments": {"accession": "P19438"},
+        "purpose": "Get TNFR1 protein information and functional domains",
+        "required": true
+      },
+      {
+        "server": "uniprot",
+        "tool": "get_protein_info",
+        "arguments": {"accession": "P20333"},
+        "purpose": "Get TNFR2 protein information for selectivity comparison",
+        "required": true
+      },
+      {
+        "server": "rcsbpdb",
+        "tool": "download_pdb",
+        "arguments": {"pdb_id": "1NCF"},
+        "purpose": "Get TNFR1 crystal structure for binding site mapping",
+        "required": true
+      },
+      {
+        "server": "rcsbpdb",
+        "tool": "download_pdb",
+        "arguments": {"pdb_id": "3ALQ"},
+        "purpose": "Get TNFR2 structure for negative design",
+        "required": true
+      },
+      {
+        "server": "interpro",
+        "tool": "analyze_domains",
+        "arguments": {"uniprot_id": "P19438"},
+        "purpose": "Analyze TNFR1 domain architecture (CRD regions)",
+        "required": true
+      },
+      {
+        "server": "ncbi",
+        "tool": "search_pubmed",
+        "arguments": {"query": "TNFR1 TNFR2 binding site TNF ligand", "max_results": 20},
+        "purpose": "Find literature on known binding sites",
+        "required": true
+      }
+    ],
+    "save_to": "{{ experiment_dir }}/data/req_{{ requirement.requirement_id }}/collection/sources.json"
+  },
+
+  "chain2_strategy": {
+    "analysis_type": "binding_site_selection",
+    "rationale": "Analyze collected structural data to identify optimal binding site",
+    "tools": [
+      {
+        "server": "pandas_analysis",
+        "tool": "run_pandas_code_tool",
+        "arguments": {},
+        "code_hint": "import pandas as pd; data = pd.read_json('sources.json'); analyze CRD domains and TNF binding interface",
+        "purpose": "Integrate structural data and select binding site",
+        "required": true
+      }
+    ],
+    "multi_step": [
+      {"step": 1, "description": "Load collected PDB and domain data"},
+      {"step": 2, "description": "Map CRD2-CRD3 interface residues from crystal structure"},
+      {"step": 3, "description": "Compare TNFR1 vs TNFR2 for selectivity opportunities"},
+      {"step": 4, "description": "Select and justify binding site with residue list"}
+    ],
+    "input_files": ["{{ experiment_dir }}/data/req_{{ requirement.requirement_id }}/collection/sources.json"],
+    "save_to": "{{ experiment_dir }}/data/req_{{ requirement.requirement_id }}/analysis/results.json"
+  },
+
+  "expected_outputs": ["selected_binding_site", "interface_residues", "selectivity_rationale"],
+
+  "entity_names": [
+    {"type": "protein", "name": "TNFR1 (TNFRSF1A)"},
+    {"type": "protein", "name": "TNFR2 (TNFRSF1B)"}
+  ]
+}
+```
+
+**Example 8: Binder Sequence Design (design - depends_on previous requirements)**
+
+Requirement: "Design candidate mini-binder sequences targeting TNFR1"
+Depends On: ["1", "2"] (binding site selection, biophysical constraints)
+
+Output:
+```json
+{
+  "requirement_type": "collection_required",
+  "rationale": "Need to design binder sequences using computational tools based on target structure and constraints from previous requirements",
+
+  "input_files": [],
+
+  "chain1_strategy": {
+    "skip_collection": false,
+    "rationale": "Download target structure for binder design tools",
+    "tools": [
+      {
+        "server": "rcsbpdb",
+        "tool": "download_pdb",
+        "arguments": {"pdb_id": "1NCF"},
+        "purpose": "Get TNFR1 structure as design target",
+        "required": true
+      }
+    ],
+    "save_to": "{{ experiment_dir }}/data/req_{{ requirement.requirement_id }}/collection/sources.json"
+  },
+
+  "chain2_strategy": {
+    "analysis_type": "binder_design",
+    "rationale": "Use RFdiffusion and ProteinMPNN to design binder sequences",
+    "depends_on": ["1", "2"],
+    "input_result_files": [
+      "{{ experiment_dir }}/data/req_1/analysis/results.json",
+      "{{ experiment_dir }}/data/req_2/analysis/results.json"
+    ],
+    "tools": [
+      {
+        "server": "rfdiffusion",
+        "tool": "design_binder",
+        "arguments": {
+          "target_pdb": "1NCF.pdb",
+          "hotspot_residues": [78, 79, 80, 81, 82],
+          "binder_length": 60,
+          "num_designs": 5
+        },
+        "purpose": "Generate binder backbone structures targeting TNFR1 binding site",
+        "required": true
+      },
+      {
+        "server": "proteinmpnn",
+        "tool": "design_sequence",
+        "arguments": {
+          "pdb_path": "rfdiffusion_output.pdb",
+          "chain": "B",
+          "num_sequences": 10
+        },
+        "purpose": "Design amino acid sequences for binder backbones",
+        "required": true
+      },
+      {
+        "server": "esmfold",
+        "tool": "predict_structure",
+        "arguments": {"sequence": "designed_sequence"},
+        "purpose": "Validate designed sequences fold correctly",
+        "required": true
+      }
+    ],
+    "multi_step": [
+      {"step": 1, "description": "Load binding site from requirement 1 results"},
+      {"step": 2, "description": "Load biophysical constraints from requirement 2"},
+      {"step": 3, "description": "Run RFdiffusion to generate binder backbones"},
+      {"step": 4, "description": "Run ProteinMPNN to design sequences"},
+      {"step": 5, "description": "Filter sequences by biophysical constraints"},
+      {"step": 6, "description": "Validate with ESMFold structure prediction"}
+    ],
+    "input_files": [
+      "{{ experiment_dir }}/data/req_1/analysis/results.json",
+      "{{ experiment_dir }}/data/req_2/analysis/results.json"
+    ],
+    "save_to": "{{ experiment_dir }}/data/req_{{ requirement.requirement_id }}/analysis/results.json"
+  },
+
+  "expected_outputs": ["binder_sequences", "binder_structures", "design_scores"],
+
+  "entity_names": [
+    {"type": "protein", "name": "Designed mini-binders"},
+    {"type": "protein", "name": "TNFR1 target"}
+  ]
+}
+```
+
+**Example 9: Binding Structure & Affinity Prediction (depends_on design)**
+
+Requirement: "Predict binding structure and affinity (KD) for designed binders"
+Depends On: ["3"] (designed binder sequences)
+
+Output:
+```json
+{
+  "requirement_type": "synthesis",
+  "rationale": "Use computational docking and scoring based on designed sequences from requirement 3",
+
+  "input_files": [],
+
+  "chain1_strategy": {
+    "skip_collection": true,
+    "rationale": "Use binder sequences from requirement 3, no new external data needed",
+    "tools": [],
+    "save_to": null
+  },
+
+  "chain2_strategy": {
+    "analysis_type": "docking_and_affinity",
+    "rationale": "Predict binding structures and calculate binding affinity",
+    "depends_on": ["3"],
+    "input_result_files": [
+      "{{ experiment_dir }}/data/req_3/analysis/results.json"
+    ],
+    "tools": [
+      {
+        "server": "esmfold",
+        "tool": "predict_structure",
+        "arguments": {"sequence": "binder_sequence_from_req3"},
+        "purpose": "Predict 3D structure of designed binders",
+        "required": true
+      },
+      {
+        "server": "rosetta",
+        "tool": "dock_proteins",
+        "arguments": {
+          "receptor": "target_tnfr1.pdb",
+          "ligand": "binder.pdb",
+          "nstruct": 100
+        },
+        "purpose": "Dock binder to TNFR1 and predict binding pose",
+        "required": true
+      },
+      {
+        "server": "rosetta",
+        "tool": "calculate_energy",
+        "arguments": {"pdb_path": "docked_complex.pdb"},
+        "purpose": "Calculate binding energy (ΔG) for KD estimation",
+        "required": true
+      }
+    ],
+    "multi_step": [
+      {"step": 1, "description": "Load designed binder sequences from requirement 3"},
+      {"step": 2, "description": "Predict binder structures with ESMFold"},
+      {"step": 3, "description": "Dock each binder to TNFR1 using Rosetta"},
+      {"step": 4, "description": "Score complexes and estimate KD from binding energy"},
+      {"step": 5, "description": "Rank binders by predicted affinity"}
+    ],
+    "input_files": ["{{ experiment_dir }}/data/req_3/analysis/results.json"],
+    "save_to": "{{ experiment_dir }}/data/req_{{ requirement.requirement_id }}/analysis/results.json"
+  },
+
+  "expected_outputs": ["binding_structures", "docking_scores", "predicted_KD", "kinetic_estimates"],
+
+  "entity_names": [
+    {"type": "protein", "name": "Binder-TNFR1 complexes"}
+  ]
+}
+```
+
+**Example 10: Off-target Binding Evaluation (collection_required)**
+
+Requirement: "Identify potential off-target receptors and evaluate binding risk"
+Depends On: ["3"] (designed binder sequences)
+
+Output:
+```json
+{
+  "requirement_type": "collection_required",
+  "rationale": "Need BLAST search to find similar proteins and evaluate off-target binding potential",
+
+  "input_files": [],
+
+  "chain1_strategy": {
+    "skip_collection": false,
+    "rationale": "Search for similar receptors that could be off-targets",
+    "tools": [
+      {
+        "server": "blast",
+        "tool": "blastp",
+        "arguments": {
+          "sequence": "TNFR1_binding_interface_sequence",
+          "database": "human_proteome",
+          "evalue": 0.01,
+          "max_hits": 50
+        },
+        "purpose": "Find proteins with similar binding interfaces (potential off-targets)",
+        "required": true
+      },
+      {
+        "server": "stringdb",
+        "tool": "get_interaction_partners",
+        "arguments": {"protein": "TNFRSF1A", "species": 9606, "limit": 30},
+        "purpose": "Identify TNFR family members and related receptors",
+        "required": true
+      },
+      {
+        "server": "uniprot",
+        "tool": "get_protein_info",
+        "arguments": {"accession": "P25445"},
+        "purpose": "Get FAS receptor info for off-target comparison",
+        "required": true
+      },
+      {
+        "server": "uniprot",
+        "tool": "get_protein_info",
+        "arguments": {"accession": "O14763"},
+        "purpose": "Get TRAIL receptor (DR4) info for off-target comparison",
+        "required": true
+      }
+    ],
+    "save_to": "{{ experiment_dir }}/data/req_{{ requirement.requirement_id }}/collection/sources.json"
+  },
+
+  "chain2_strategy": {
+    "analysis_type": "off_target_evaluation",
+    "rationale": "Evaluate binder selectivity against identified off-targets",
+    "depends_on": ["3"],
+    "input_result_files": [
+      "{{ experiment_dir }}/data/req_3/analysis/results.json"
+    ],
+    "tools": [
+      {
+        "server": "rosetta",
+        "tool": "dock_proteins",
+        "arguments": {
+          "receptor": "off_target.pdb",
+          "ligand": "binder.pdb"
+        },
+        "purpose": "Cross-dock binders to potential off-targets",
+        "required": true
+      },
+      {
+        "server": "pandas_analysis",
+        "tool": "run_pandas_code_tool",
+        "arguments": {},
+        "code_hint": "Compare on-target vs off-target docking scores; calculate selectivity ratios",
+        "purpose": "Calculate selectivity metrics",
+        "required": true
+      }
+    ],
+    "multi_step": [
+      {"step": 1, "description": "Load binder sequences from requirement 3"},
+      {"step": 2, "description": "Load collected off-target receptor structures"},
+      {"step": 3, "description": "Cross-dock binders to each off-target"},
+      {"step": 4, "description": "Compare binding scores (on-target vs off-target)"},
+      {"step": 5, "description": "Generate selectivity report and risk assessment"}
+    ],
+    "input_files": [
+      "{{ experiment_dir }}/data/req_{{ requirement.requirement_id }}/collection/sources.json",
+      "{{ experiment_dir }}/data/req_3/analysis/results.json"
+    ],
+    "save_to": "{{ experiment_dir }}/data/req_{{ requirement.requirement_id }}/analysis/results.json"
+  },
+
+  "expected_outputs": ["off_target_list", "cross_docking_scores", "selectivity_ratios", "risk_assessment"],
+
+  "entity_names": [
+    {"type": "protein", "name": "TNFR superfamily off-targets"},
+    {"type": "protein", "name": "FAS, DR4, DR5, CD40"}
+  ]
+}
+```
+
+================================================================================
+REQUIREMENT TYPE → DEFAULT TOOLS (Problem-Agnostic Rules)
+================================================================================
+
+**IMPORTANT**: Use these rules to select tools based on requirement_type and keywords.
+This is MORE IMPORTANT than the examples above.
+
+## Requirement Type Detection
+
+| Keyword in Title/Description | requirement_type | Chain 1 Action |
+|------------------------------|------------------|----------------|
+| "design", "generate", "create" sequence/binder/protein | `design` | Collect target structure |
+| "predict", "dock", "calculate" structure/affinity/energy | `computational` | Use previous results |
+| "identify", "screen", "evaluate" off-target/similarity | `validation` | Collect comparison data |
+| "integrate", "combine", "rank", "prioritize" | `synthesis` | Skip (use previous results) |
+| "analyze", "summarize", "characterize" | `analysis` | Collect from databases |
+| Has input files (CSV, BAM, etc.) | `input_only` | Skip (use input files) |
+
+## Default Tools by Requirement Type
+
+### design (서열/구조 설계)
+```
+Chain 1: rcsbpdb.download_pdb (target structure)
+Chain 2: rfdiffusion.design_binder, proteinmpnn.design_sequence, esmfold.predict_structure
+```
+
+### computational (구조 예측/도킹/에너지 계산)
+```
+Chain 1: Skip if depends_on has sequences, else rcsbpdb.download_pdb
+Chain 2: esmfold.predict_structure, rosetta.dock_proteins, rosetta.calculate_energy
+```
+
+### validation (Off-target/유사성 검증)
+```
+Chain 1: blast.blastp, stringdb.get_interaction_partners, uniprot.get_protein_info
+Chain 2: rosetta.dock_proteins (cross-docking), pandas_analysis (selectivity calculation)
+```
+
+### synthesis (결과 통합/랭킹)
+```
+Chain 1: Skip (use previous requirement result files)
+Chain 2: pandas_analysis.run_pandas_code_tool (load and integrate JSON files)
+```
+
+### analysis (데이터 분석/기능 요약)
+```
+Chain 1: ncbi.get_gene_info, uniprot.get_protein_info, kegg.get_pathway_info, ncbi.search_pubmed
+Chain 2: pandas_analysis.run_pandas_code_tool, networkx.build_network
+```
+
+### input_only (입력 파일 분석)
+```
+Chain 1: Skip (input files provided)
+Chain 2: Based on file type:
+  - CSV → pandas_analysis.read_metadata_tool, pandas_analysis.run_pandas_code_tool
+  - BAM → nanopore.analyze_polya_lengths, nanopore.get_alignment_stats
+  - POD5 → nanopore.detect_modified_bases
+  - FASTA → blast.blastp, msa.align_sequences
+  - PDB → rosetta.calculate_energy, vina.dock_ligand
+```
+
+## Automatic Tool Selection Rules
+
+1. **If title contains "design" or "generate"** → Use design tools (rfdiffusion, proteinmpnn)
+2. **If title contains "predict" or "dock"** → Use computational tools (esmfold, rosetta)
+3. **If title contains "off-target" or "selectivity"** → Use validation tools (blast, stringdb)
+4. **If depends_on has 2+ requirements** → Likely synthesis (pandas_analysis integration)
+5. **If input files are provided** → input_only (file-type specific tools)
+6. **Default for analysis** → ncbi, uniprot, kegg collection + pandas_analysis
+
+================================================================================
+CRITICAL RULES
+================================================================================
+
+1. **Requirement Type First**: Classify requirement type BEFORE planning strategies
+2. **Match Input Files to Tools**: If input is CSV → pandas; BAM → nanopore; POD5 → nanopore
+3. **Use Default Tools Above**: When unsure, use the DEFAULT TOOLS mapping by requirement_type
+4. **Use File Paths**: Reference actual file paths, not truncated summaries
+5. **Synthesis Uses File Paths**: For synthesis, list actual result file paths in input_result_files
+6. **Concrete Arguments**: Provide actual argument values, not placeholders
+7. **Save Full Results**: Always specify save_to path for full data storage
+8. **NEVER skip_collection for design/validation**: These ALWAYS need external data
 
 ================================================================================
 INSTRUCTIONS
 ================================================================================
 
-1. **Read the requirement carefully** - identify all entities, expected deliverables
-2. **Extract context refinements** - look for specific values in context deliverables
-3. **Classify entities** - use the entity type reference table
-4. **Determine data needs** - based on entities and deliverables
-5. **Identify analyses** - based on requirement type (design, analysis, screening, etc.)
-6. **Return strict JSON** - must be valid, parseable JSON
+1. **Classify requirement type** based on input files and dependencies
+2. **Plan Chain 1** - list collection tools OR set skip_collection: true
+3. **Plan Chain 2** - list analysis tools with concrete arguments
+4. **Match file types to tools** using the reference tables above
+5. **Return strict JSON** - must be valid, parseable JSON
 
-**CRITICAL**:
-- Focus on the **requirement description** as primary source
-- Use **context deliverables** to refine entities (e.g., narrow protein → domain)
-- Use **research_goal** only as fallback if requirement is unclear
-- All JSON keys must be exactly as shown in the schema
-- All entity types must be from the reference table
-
-Now analyze the requirement above and return your entity analysis as JSON.
+Now analyze the requirement above and return your strategy as JSON.

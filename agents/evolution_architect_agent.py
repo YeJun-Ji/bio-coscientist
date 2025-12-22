@@ -1,15 +1,16 @@
 """
-Evolution Architect Agent - v5.0 Simplified Evaluation Pipeline
+Evolution Architect Agent - v6.0 (PASS - Disabled)
 
-This agent enriches the SINGLE CONFIRMED ANSWER (tournament winner) without
-changing core content.
+This agent is designed to enrich the SINGLE CONFIRMED ANSWER (tournament winner)
+with additional analysis. Currently disabled (returns None immediately).
 
-Three Parallel Modules:
+Three Parallel Modules (for future use):
 1. Protocol Generation: Step-by-step experimental validation procedure
 2. Literature Support: Supporting/contradicting papers via PubMed
 3. Risk Analysis: Potential issues + mitigation strategies
 
-IMPORTANT: Only runs on the final confirmed answer, NOT on all generated answers.
+NOTE: v6.0 - This agent is currently in PASS mode. All enrichment is disabled.
+The structure is retained for future implementation.
 """
 
 import logging
@@ -41,11 +42,10 @@ class EvolutionArchitectAgent(BaseAgent):
     """
     Enriches confirmed answer with protocol/literature/risk analysis.
 
-    Architecture Note:
-    - All 3 modules run in parallel (asyncio.gather)
-    - Uses semaphore to limit concurrent MCP calls (max 2)
-    - Runs in background (non-blocking)
-    - Only applied to SINGLE confirmed answer
+    Architecture Note (v6.0 - PASS MODE):
+    - Currently returns None immediately (disabled)
+    - Structure retained for future implementation
+    - Three modules available: protocol, literature, risk
     """
 
     def __init__(
@@ -71,7 +71,7 @@ class EvolutionArchitectAgent(BaseAgent):
         # Semaphore to limit concurrent MCP calls
         self.mcp_semaphore = asyncio.Semaphore(2)  # Max 2 concurrent
 
-        self.log("EvolutionArchitectAgent initialized (v5.0 - 3 parallel modules)")
+        self.log("EvolutionArchitectAgent initialized (v6.0 - PASS mode, disabled)")
 
     # ========================================================================
     # Main Entry Point (Required by BaseAgent)
@@ -108,7 +108,33 @@ class EvolutionArchitectAgent(BaseAgent):
         context: Dict[str, RequirementAnswer]
     ) -> Optional[EnrichmentResult]:
         """
-        Run 3 parallel enrichment modules on confirmed answer.
+        v6.0 PASS MODE: Returns None immediately.
+
+        This method is disabled in v6.0. The structure is retained for future use.
+
+        Args:
+            answer: CONFIRMED RequirementAnswer (tournament winner)
+            requirement: Requirement specification
+            context: Confirmed answers from dependencies
+
+        Returns:
+            None (v6.0 - disabled)
+        """
+        answer_id = answer.id if hasattr(answer, 'id') else str(answer.get('id', 'unknown'))
+        self.log(f"Evolution Phase: PASS (v6.0 - disabled) for answer {answer_id[:8]}...")
+        return None
+
+    async def _enrich_confirmed_answer_impl(
+        self,
+        answer: RequirementAnswer,
+        requirement: Dict[str, Any],
+        context: Dict[str, RequirementAnswer]
+    ) -> Optional[EnrichmentResult]:
+        """
+        FUTURE USE: Run 3 parallel enrichment modules on confirmed answer.
+
+        This is the original implementation, disabled in v6.0.
+        To enable, rename this to enrich_confirmed_answer and remove the PASS version.
 
         Args:
             answer: CONFIRMED RequirementAnswer (tournament winner)

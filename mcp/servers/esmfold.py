@@ -8,6 +8,8 @@ import subprocess
 from typing import List, Dict, Any
 import logging
 
+from ..server_templates import install_server_template
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,24 +47,32 @@ class ESMFoldServer:
 
     @staticmethod
     def install():
-        """Install ESMFold MCP server (already created, just verify)"""
+        """Install ESMFold MCP server from template"""
         install_path = ESMFoldServer.get_install_path()
 
         if ESMFoldServer.is_installed():
             logger.info(f"ESMFold server already installed at {install_path}")
             return
 
-        logger.info("ESMFold server not found. Please run the setup manually.")
-        logger.info(f"Expected location: {install_path}")
+        logger.info(f"Installing ESMFold server to {install_path}")
 
         # Create directory if needed
         os.makedirs(install_path, exist_ok=True)
 
-        # Check if venv exists, if not create it
+        # Install server.py from template
+        server_path = os.path.join(install_path, "server.py")
+        if not os.path.exists(server_path):
+            if not install_server_template("esmfold", install_path):
+                raise RuntimeError("Failed to install ESMFold server template")
+            logger.info("✅ Installed server.py from template")
+
+        # Create venv and install dependencies
         venv_path = os.path.join(install_path, ".venv")
+        venv_python = os.path.join(venv_path, "bin", "python")
+        uv_path = os.path.expanduser("~/.local/bin/uv")
+
         if not os.path.exists(venv_path):
             logger.info("Creating virtual environment...")
-            uv_path = os.path.expanduser("~/.local/bin/uv")
             subprocess.run(
                 [uv_path, "venv", "--python", "3.10", ".venv"],
                 cwd=install_path,
@@ -70,16 +80,14 @@ class ESMFoldServer:
                 capture_output=True
             )
 
-            # Install requirements
-            requirements_path = os.path.join(install_path, "requirements.txt")
-            if os.path.exists(requirements_path):
-                logger.info("Installing dependencies...")
-                subprocess.run(
-                    [uv_path, "pip", "install", "-r", requirements_path],
-                    cwd=install_path,
-                    check=True,
-                    capture_output=True
-                )
+        # Install dependencies using uv pip
+        logger.info("Installing dependencies...")
+        subprocess.run(
+            [uv_path, "pip", "install", "--python", venv_python, "mcp", "requests", "biopython"],
+            cwd=install_path,
+            check=True,
+            capture_output=True
+        )
 
         logger.info("✅ ESMFold server setup complete")
 
